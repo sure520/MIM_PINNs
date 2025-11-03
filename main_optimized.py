@@ -153,7 +153,7 @@ def run_training(config, device, save_dir):
                     f.write(f"最终损失: {loss_history['total_loss'][-1]:.6f}\n")
                     f.write(f"模型保存路径: {model_path}\n")
                     for t in range(len(loss_history['total_loss'])):
-                        f.write(f"第{t}同伦步骤: \n总损失={loss_history['total_loss'][t]:.6f}, \nF损失={loss_history['F_loss'][t]:.6f}, \nG损失={loss_history['G_loss'][t]:.6f}, \nR_b损失={loss_history['R_b_loss'][t]:.6f}\n")
+                        f.write(f"第{t}同伦步骤: \n总损失={loss_history['total_loss'][t]:.6f}, \nF损失={loss_history['F_loss'][t]:.6f}, \nG损失={loss_history['G_loss'][t]:.6f}, \nR_b损失={loss_history['R_b_loss'][t]:.6f}, \nω²={loss_history['omega2'][t]:.6f}, \n非零解惩罚={loss_history['L_nonzero'][t]:.6f}\n")
                 
                 print(f"✅ 模型已保存到: {model_path}")
                 print(f"✅ 训练日志已保存到: {log_path}")

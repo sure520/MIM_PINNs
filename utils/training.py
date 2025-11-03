@@ -84,7 +84,8 @@ class Trainer:
             'F_loss': [],
             'G_loss': [],
             'R_b_loss': [],
-            'omega2': []
+            'omega2': [],
+            'L_nonzero': []
         }
         
         # 同伦训练循环
@@ -110,13 +111,15 @@ class Trainer:
             loss_history['G_loss'].extend(step_losses['G_loss'])
             loss_history['R_b_loss'].extend(step_losses['R_b_loss'])
             loss_history['omega2'].extend(step_losses['omega2'])
+            loss_history['L_nonzero'].extend(step_losses['L_nonzero'])
             
             # 打印当前步骤的结果
             print(f"  最终损失: {step_losses['total_loss'][-1]:.6f}, "
                   f"F损失: {step_losses['F_loss'][-1]:.6f}, "
                   f"G损失: {step_losses['G_loss'][-1]:.6f}, "
                   f"边界损失: {step_losses['R_b_loss'][-1]:.6f}, "
-                  f"ω²: {step_losses['omega2'][-1]:.6f}")
+                  f"ω²: {step_losses['omega2'][-1]:.6f}, "
+                  f"非零解惩罚: {step_losses['L_nonzero'][-1]:.6f}")
         
         # 最后一步使用L-BFGS精炼
         print("使用L-BFGS进行精炼...")
@@ -141,7 +144,8 @@ class Trainer:
             'F_loss': [],
             'G_loss': [],
             'R_b_loss': [],
-            'omega2': []
+            'omega2': [],
+            'L_nonzero': [],
         }
         
         # 训练循环
@@ -164,6 +168,7 @@ class Trainer:
                 step_losses['G_loss'].append(G.item())
                 step_losses['R_b_loss'].append(R_b.item())
                 step_losses['omega2'].append(self.omega2.item())
+                step_losses['L_nonzero'].append(L_nonzero.item())
                 
                 if self.verbose > 1 and epoch % 1000 == 0:
                     print(f"    Epoch {epoch}: Loss={loss.item():.6f}, "
