@@ -110,13 +110,6 @@ class DirectTrainer:
         # 生成训练数据
         self.x, self.x_b, self.x_test = data_gen.generate_all_data(device=self.device)
         
-        # 初始化特征值
-        self.omega2 = torch.tensor(
-            self.config['training']['omega2_init'], 
-            device=self.device, 
-            requires_grad=True
-        )
-        
         # 设置优化器
         self.optimizer = self._setup_optimizer()
         
@@ -568,12 +561,11 @@ class DirectTrainer:
             # 在测试点上计算预测
             y1_test, y2_test, y3_test, y4_test, omega2_test = self.model(self.x_test)
             
-            # 计算PDE残差
-            pde_residual = self._compute_pde_residual(y1_test, y2_test, y3_test, y4_test, omega2_test)
-            pde_error = torch.mean(pde_residual**2).item()
+            # 计算PDE残差 - 实现实际的PDE残差计算
+            pde_error = self._compute_pde_residual(y1_test, y2_test, y3_test, y4_test, omega2_test)
             
             # 计算边界条件误差
-            bc_error = self._compute_boundary_loss(self.x_b).item()
+            bc_error = self._compute_boundary_loss(y1_test, y2_test, y3_test, y4_test)
             
             # 计算解的L2范数
             solution_norm = torch.mean(y1_test**2).item()
@@ -582,7 +574,7 @@ class DirectTrainer:
                 'pde_error': pde_error,
                 'bc_error': bc_error,
                 'solution_norm': solution_norm,
-                'omega2': self.omega2.item(),
+                'omega2': omega2_test,
                 'final_loss': self.history['total_loss'][-1] if self.history['total_loss'] else float('inf')
             }
         
@@ -591,6 +583,56 @@ class DirectTrainer:
                         f"特征值={eval_results['omega2']:.6f}")
         
         return eval_results
+    
+    def _compute_pde_residual(self, y1, y2, y3, y4, omega2):
+        """
+        计算PDE残差
+        
+        Args:
+            y1, y2, y3, y4: 模型输出的四个分量
+            omega2: 特征值平方
+            
+        Returns:
+            pde_error: PDE残差的均方误差
+        """
+        # 获取方程参数
+        T = self.config['equation']['T']
+        v = self.config['equation']['v']
+        
+        # 计算空间导数
+        y1_x = torch.autograd.grad(y1, self.x_test, grad_outputs=torch.ones_like(y1),
+                                 create_graph=True, retain_graph=True)[0]
+        y1_xx = torch.autograd.grad(y1_x, self.x_test, grad_outputs=torch.ones_like(y1_x),
+                                  create_graph=True, retain_graph=True)[0]
+        
+        # 计算PDE残差
+        # 根据MIM-HomPINNs的PDE形式: y1_xx + omega2/T * y1 + v/T * y2 = 0
+        pde_residual = y1_xx + (omega2 / T) * y1 + (v / T) * y2
+        
+        # 返回均方误差
+        return torch.mean(pde_residual**2).item()
+    
+    def _compute_boundary_loss(self, y1, y2, y3, y4):
+        """
+        计算边界条件误差
+        
+        Args:
+            y1, y2, y3, y4: 模型输出的四个分量
+            
+        Returns:
+            bc_error: 边界条件误差
+        """
+        # 获取边界点
+        x_b = self.x_b
+        
+        # 在边界点上计算预测
+        y1_b, y2_b, y3_b, y4_b, _ = self.model(x_b)
+        
+        # 计算边界条件误差
+        # 假设边界条件为 y1(0) = y1(1) = 0
+        bc_loss = torch.mean(y1_b**2)
+        
+        return bc_loss.item()
 
 
 def create_direct_trainer(model, data_gen, config=None, device='cpu', save_dir='results'):
