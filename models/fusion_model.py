@@ -339,3 +339,192 @@ class MIMHomPINNFusion(nn.Module):
         loss = t * F + (1 - t) * G + alpha_dynamic * R_b + beta * L_nonzero
         
         return loss, F, G, R_b, L_nonzero
+
+    def compute_residual_loss(self, x, T=600, v=50, omega2=None):
+        """
+        计算控制方程残差损失 L_r（核心物理约束）
+        
+        基于MIM降阶方法，将四阶方程转化为一阶系统：
+        R1 = y2 - y1' = 0
+        R2 = y3 - y2' = 0  
+        R3 = y4 - y3' = 0
+        R4 = y4' - ((T+vx)y'' + vy' + ω²y) = 0
+        
+        Args:
+            x: 内部点
+            T: 方程参数T
+            v: 方程参数v
+            omega2: 特征值
+        Returns:
+            L_r: 残差损失
+            y1, y2, y3, y4, omega2_val: 各变量值
+        """
+        R1, R2, R3, R4, y1, y2, y3, y4, omega2_val, y1_x, y2_x, y3_x, y4_x = self.compute_residuals(x, T, v, omega2)
+        
+        # 残差损失：L_r = (R1^2 + R2^2 + R3^2 + R4^2)的均值
+        L_r = (R1**2 + R2**2 + R3**2 + R4**2).mean()
+        
+        return L_r, y1, y2, y3, y4, omega2_val
+    
+    def compute_boundary_loss(self, x_b):
+        """
+        计算边界条件损失 L_b（硬约束保障）
+        
+        针对简支-简支边界条件：y(0)=y(1)=0, y''(0)=y''(1)=0
+        
+        Args:
+            x_b: 边界点
+        Returns:
+            L_b: 边界损失
+        """
+        R_b, y1_b, y3_b = self.compute_boundary_residuals(x_b)
+        L_b = R_b.mean()
+        return L_b
+    
+    def compute_amplitude_constraint_loss(self, x_a, y_a=1.0, T=600, v=50, omega2=None):
+        """
+        计算振幅约束损失 L_a（规避模态歧义问题）
+        
+        特征值问题中，同一特征值对应无穷多倍乘关系的eigenfunction，
+        需通过振幅约束固定模态形态，避免训练震荡。
+        
+        Args:
+            x_a: 约束点位置（避开潜在节点，默认x=0.5）
+            y_a: 约束点目标值（任意非零值，默认1.0）
+            T: 方程参数T
+            v: 方程参数v
+            omega2: 特征值
+        Returns:
+            L_a: 振幅约束损失
+        """
+        # 确保x_a是tensor格式
+        if not isinstance(x_a, torch.Tensor):
+            x_a = torch.tensor([x_a], dtype=torch.float32, device=self.device).requires_grad_(True)
+        
+        # 在约束点处计算解的值
+        y1_a = self.forward(x_a)[:, 0]  # 获取y1在约束点处的值
+        
+        # 振幅约束损失：在约束点处解的值与目标值的平方差
+        L_a = (y1_a - y_a)**2
+        
+        return L_a.mean()
+    
+    def compute_eigenvalue_hierarchy_loss(self, omega2_val, omega_low_2, epsilon=5.0, a=20.0):
+        """
+        计算特征值层级约束损失 L_c（实现多阶特征值引导功能）
+        
+        利用已求解的低阶特征值ω_low²，引导高阶特征值收敛，避免特征值趋同问题。
+        
+        Args:
+            omega2_val: 当前特征值
+            omega_low_2: 低阶特征值
+            epsilon: 安全边际（默认5.0）
+            a: 缩放参数（默认20.0）
+        Returns:
+            L_c: 特征值层级约束损失
+        """
+        # 使用Sigmoid函数实现特征值范围约束
+        # L_c = -σ(a·(ω² - (ω_low² + ε))) + 1
+        z = a * (omega2_val - (omega_low_2 + epsilon))
+        sigma_z = 1.0 / (1.0 + torch.exp(-z))  # Sigmoid函数
+        L_c = -sigma_z + 1.0
+        
+        return L_c
+    
+    def compute_nonzero_solution_loss(self, y1, epsilon=1e-6):
+        """
+        计算非零解惩罚损失 L_nz（排除零解）
+        
+        零解（y(x)≡0）对任意ω²均满足方程，需通过惩罚强制排除。
+        
+        Args:
+            y1: 主要解变量（位移）
+            epsilon: 数值稳定项（默认1e-6）
+        Returns:
+            L_nz: 非零解惩罚损失
+        """
+        # 解的L2范数平方：||y||₂² = (1/N) Σ y(x_i)²
+        y_norm_squared = (y1**2).mean()
+        
+        # 非零解惩罚：L_nz = 1 / (||y||₂² + ε)
+        L_nz = 1.0 / (y_norm_squared + epsilon)
+        
+        return L_nz
+    
+    def compute_total_loss(self, x, x_b, T=600, v=50, omega2=None, omega_low_2=None, 
+                          weights=None, x_a=0.5, y_a=1.0, epsilon_hierarchy=5.0, a=20.0, epsilon_nonzero=1e-6):
+        """
+        计算完整的总损失函数
+        
+        总损失：L_total = ω_r·L_r + ω_b·L_b + ω_a·L_a + ω_c·L_c + ω_nz·L_nz
+        
+        Args:
+            x: 内部点
+            x_b: 边界点
+            T: 方程参数T
+            v: 方程参数v
+            omega2: 特征值
+            omega_low_2: 低阶特征值（用于层级约束）
+            weights: 各损失项权重字典
+            x_a: 振幅约束点位置
+            y_a: 振幅约束目标值
+            epsilon_hierarchy: 层级约束安全边际
+            a: 层级约束缩放参数
+            epsilon_nonzero: 非零解惩罚数值稳定项
+        Returns:
+            total_loss: 总损失
+            loss_dict: 各损失项详细值
+        """
+        # 默认权重设置（可根据训练阶段动态调整）
+        default_weights = {
+            'residual': 1.0,      # ω_r: 残差损失权重
+            'boundary': 100.0,    # ω_b: 边界损失权重
+            'amplitude': 100.0,   # ω_a: 振幅约束权重
+            'hierarchy': 100.0,   # ω_c: 层级约束权重
+            'nonzero': 1e-4       # ω_nz: 非零解惩罚权重
+        }
+        
+        if weights is not None:
+            default_weights.update(weights)
+        
+        weights = default_weights
+        
+        # 计算各损失项
+        # 1. 控制方程残差损失
+        L_r, y1, y2, y3, y4, omega2_val = self.compute_residual_loss(x, T, v, omega2)
+        
+        # 2. 边界条件损失
+        L_b = self.compute_boundary_loss(x_b)
+        
+        # 3. 振幅约束损失
+        # 注意：振幅约束需要在特定配点处计算，这里使用x_a作为约束点
+        L_a = self.compute_amplitude_constraint_loss(x_a, y_a, T, v, omega2)
+        
+        # 4. 特征值层级约束损失（如果有低阶特征值）
+        if omega_low_2 is not None:
+            L_c = self.compute_eigenvalue_hierarchy_loss(omega2_val, omega_low_2, epsilon_hierarchy, a)
+        else:
+            L_c = torch.tensor(0.0, device=self.device)
+        
+        # 5. 非零解惩罚损失
+        L_nz = self.compute_nonzero_solution_loss(y1, epsilon_nonzero)
+        
+        # 计算总损失
+        total_loss = (weights['residual'] * L_r + 
+                     weights['boundary'] * L_b + 
+                     weights['amplitude'] * L_a + 
+                     weights['hierarchy'] * L_c + 
+                     weights['nonzero'] * L_nz)
+        
+        # 返回详细损失信息
+        loss_dict = {
+            'total_loss': total_loss,
+            'residual_loss': L_r,
+            'boundary_loss': L_b,
+            'amplitude_loss': L_a,
+            'hierarchy_loss': L_c,
+            'nonzero_loss': L_nz,
+            'omega2': omega2_val
+        }
+        
+        return total_loss, loss_dict
