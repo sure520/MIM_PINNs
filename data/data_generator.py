@@ -50,13 +50,15 @@ class DataGenerator:
             ])
             # 打乱顺序（可选，让 0 和 1 随机分布）
             np.random.shuffle(x_boundary)
+        else:
+            x_boundary = np.array([self.domain[0], self.domain[1]])
         self.x_boundary = torch.tensor(x_boundary, dtype=torch.float32).unsqueeze(1)
         
         # 生成测试点
         x_test = np.linspace(self.domain[0], self.domain[1], self.n_test)
         self.x_test = torch.tensor(x_test, dtype=torch.float32).unsqueeze(1)
     
-    def get_training_data(self, device='cpu'):
+    def get_training_data(self, device='cuda'):
         """
         获取训练数据
         
@@ -69,7 +71,7 @@ class DataGenerator:
         """
         return self.x_domain.to(device), self.x_boundary.to(device)
     
-    def get_test_data(self, device='cpu'):
+    def get_test_data(self, device='cuda'):
         """
         获取测试数据
         
@@ -81,7 +83,7 @@ class DataGenerator:
         """
         return self.x_test.to(device)
     
-    def get_all_data(self, device='cpu'):
+    def get_all_data(self, device='cuda'):
         """
         获取所有数据
         
@@ -99,7 +101,7 @@ class DataGenerator:
             self.x_test.to(device)
         )
     
-    def generate_all_data(self, N_f=None, N_b=None, N_test=None, domain=None, device='cpu'):
+    def generate_all_data(self, N_f=None, N_b=None, N_test=None, domain=None, device='cuda'):
         """
         生成所有数据（兼容直接训练器接口）
         

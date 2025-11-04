@@ -13,7 +13,7 @@ def test_first_order_eigenvalue():
     print("开始测试一阶特征值训练...")
     
     # 初始化模型
-    model = MIMHomPINNFusion(width=30, depth=2, model_type='MIM1', device='cpu')
+    model = MIMHomPINNFusion(width=30, depth=2, model_type='MIM1', device='cuda')
     
     # 初始化数据生成器
     data_gen = DataGenerator(N_f=2000, N_b=100)

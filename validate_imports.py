@@ -29,7 +29,7 @@ def validate_imports():
         print("✓ 训练器导入成功")
         
         # 测试模型创建
-        device = torch.device('cpu')
+        device = torch.device('cuda')
         model = MIMHomPINNFusion(width=20, depth=2, model_type='MIM1', device=device)
         print("✓ 模型创建成功")
         

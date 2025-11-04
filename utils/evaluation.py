@@ -6,7 +6,7 @@ class Evaluator:
     """
     评估器类，负责评估模型的性能
     """
-    def __init__(self, model, data_gen, device='cpu'):
+    def __init__(self, model, data_gen, device='cuda'):
         """
         初始化评估器
         Args:

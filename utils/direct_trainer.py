@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR, ExponentialLR, ReduceLROnPlateau
-from typing import override
+from typing_extensions import override
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -45,7 +45,7 @@ class DirectTrainer:
     直接优化PDE残差和边界条件，不依赖同伦连续性方法
     """
     
-    def __init__(self, model, data_gen, config=None, config_type='balanced', device='cuda' if torch.cuda.is_available() else 'cpu', save_dir='results'):
+    def __init__(self, model, data_gen, config=None, config_type='balanced', device='cuda', save_dir='results'):
         """
         初始化训练器
         
@@ -122,6 +122,9 @@ class DirectTrainer:
         # 记录初始化信息
         self._log_init_info()
         
+        # 训练开始前的设备一致性检查
+        self._check_device_consistency_before_training()
+        
         # 训练历史记录 - 适配新的损失函数结构
         self.history = {
             'total_loss': [],
@@ -192,6 +195,64 @@ class DirectTrainer:
         self.logger.info(f"设备: {self.device}")
         self.logger.info(f"保存目录: {self.save_dir}")
         self.logger.info(f"配置: {json.dumps(self.config, indent=2, ensure_ascii=False)}")
+    
+    def _check_device_consistency_before_training(self):
+        """训练开始前的设备一致性检查"""
+        self.logger.info("开始设备一致性检查...")
+        
+        # 检查模型参数设备
+        model_device = next(self.model.parameters()).device
+        self.logger.info(f"模型设备: {model_device}")
+        
+        # 检查数据设备
+        x_device = self.x.device
+        x_b_device = self.x_b.device
+        x_test_device = self.x_test.device
+        self.logger.info(f"内部点设备: {x_device}")
+        self.logger.info(f"边界点设备: {x_b_device}")
+        self.logger.info(f"测试点设备: {x_test_device}")
+        
+        # 检查设备一致性（使用字符串比较）
+        def device_to_str(device):
+            """将设备转换为规范化字符串"""
+            device_str = str(device)
+            if device_str.startswith('cuda:'):
+                return 'cuda'
+            return device_str
+        
+        model_device_str = device_to_str(model_device)
+        target_device_str = device_to_str(self.device)
+        
+        if model_device_str != target_device_str:
+            self.logger.warning(f"模型设备不一致: {model_device} vs {self.device}")
+            # 重新移动模型到正确设备
+            self.model.to(self.device)
+            self.logger.info("已重新移动模型到正确设备")
+        
+        x_device_str = device_to_str(x_device)
+        if x_device_str != target_device_str:
+            self.logger.warning(f"内部点设备不一致: {x_device} vs {self.device}")
+            self.x = self.x.to(self.device)
+            self.logger.info("已重新移动内部点到正确设备")
+        
+        x_b_device_str = device_to_str(x_b_device)
+        if x_b_device_str != target_device_str:
+            self.logger.warning(f"边界点设备不一致: {x_b_device} vs {self.device}")
+            self.x_b = self.x_b.to(self.device)
+            self.logger.info("已重新移动边界点到正确设备")
+        
+        x_test_device_str = device_to_str(x_test_device)
+        if x_test_device_str != target_device_str:
+            self.logger.warning(f"测试点设备不一致: {x_test_device} vs {self.device}")
+            self.x_test = self.x_test.to(self.device)
+            self.logger.info("已重新移动测试点到正确设备")
+        
+        # 调用模型的设备一致性检查
+        if hasattr(self.model, '_ensure_device_consistency'):
+            self.model._ensure_device_consistency()
+            self.logger.info("已执行模型内部设备一致性检查")
+        
+        self.logger.info("设备一致性检查完成")
         
     def _setup_config(self, config):
         """设置训练配置（兼容旧版本）"""
@@ -225,15 +286,8 @@ class DirectTrainer:
         # 获取模型参数
         model_params = list(self.model.parameters())
         
-        # 确保特征值参数在正确设备上并设置requires_grad
-        if not isinstance(self.omega2, torch.nn.Parameter):
-            self.omega2 = torch.nn.Parameter(
-                torch.tensor([self.config['training']['omega2_init']], dtype=torch.float32, device=self.device),
-                requires_grad=True
-            )
-        
-        # 分别优化模型参数和特征值
-        self.optimizer = self._create_optimizer(model_params + [self.omega2])
+        # 优化模型参数
+        self.optimizer = self._create_optimizer(model_params)
         
         self.logger.info(f"优化器设置完成: {self.config['training']['optimizer']}")
         
@@ -311,8 +365,13 @@ class DirectTrainer:
         v = self.config['equation']['v']
         
         # 振幅约束点位置（默认在域中点）
-        x_a = torch.tensor([0.5], dtype=torch.float32, device=self.device)
-        y_a = 1.0  # 振幅约束目标值
+        # 确保使用正确的设备（字符串形式）
+        device_str = str(self.device)
+        if device_str.startswith('cuda:'):
+            device_str = 'cuda'
+        
+        x_a = torch.tensor([0.5], dtype=torch.float32, device=device_str).reshape(-1, 1)
+        y_a = torch.tensor([1.0], dtype=torch.float32, device=device_str)  # 振幅约束目标值，确保设备一致性
         
         # 使用模型的总损失函数
         total_loss, loss_dict = self.model.compute_total_loss(
@@ -334,12 +393,6 @@ class DirectTrainer:
         )
         
         return total_loss, loss_dict
-        """计算非零解惩罚损失"""
-        # 确保解不为零
-        epsilon = 1e-6
-        nonzero_loss = 1.0 / (torch.mean(y1**2) + epsilon)
-        
-        return nonzero_loss
     
     def train(self):
         """执行训练循环"""
@@ -383,7 +436,6 @@ class DirectTrainer:
         self.history['bc_loss'].append(loss_dict['boundary_loss'].item())
         self.history['amplitude_loss'].append(loss_dict['amplitude_loss'].item())
         self.history['nonzero_loss'].append(loss_dict['nonzero_loss'].item())
-        self.history['omega2'].append(loss_dict['omega2'].item())
         self.history['learning_rate'].append(current_lr)
         
         # 如果有层级约束损失，也记录下来
@@ -401,7 +453,6 @@ class DirectTrainer:
             f"Boundary Loss: {loss_dict['boundary_loss'].item():.6f}, "
             f"Amplitude Loss: {loss_dict['amplitude_loss'].item():.6f}, "
             f"Nonzero Loss: {loss_dict['nonzero_loss'].item():.6f}, "
-            f"Omega²: {loss_dict['omega2'].item():.6f}, "
             f"LR: {current_lr:.6f}"
         )
         
@@ -442,8 +493,7 @@ class DirectTrainer:
             'Total': f"{total_loss.item():.4f}",
             'Residual': f"{loss_dict['residual_loss'].item():.4f}",
             'Boundary': f"{loss_dict['boundary_loss'].item():.4f}",
-            'Amplitude': f"{loss_dict['amplitude_loss'].item():.4f}",
-            'Omega²': f"{loss_dict['omega2'].item():.4f}"
+            'Amplitude': f"{loss_dict['amplitude_loss'].item():.4f}"
         })
     
     def _check_early_stopping(self):
@@ -635,7 +685,7 @@ class DirectTrainer:
         return bc_loss.item()
 
 
-def create_direct_trainer(model, data_gen, config=None, device='cpu', save_dir='results'):
+def create_direct_trainer(model, data_gen, config=None, device='cuda', save_dir='results'):
     """
     创建直接训练器的便捷函数
     
@@ -657,7 +707,7 @@ class HierarchicalDirectTrainer(DirectTrainer):
     分阶直接训练器，支持"无同伦、分阶聚焦"的训练流程
     """
     
-    def __init__(self, model, data_gen, config=None, config_type='balanced', device='cuda' if torch.cuda.is_available() else 'cpu', save_dir='results', k=1, omega_low_2=None):
+    def __init__(self, model, data_gen, config=None, config_type='balanced', device='cuda', save_dir='results', k=1, omega_low_2=None):
         """
         初始化分阶训练器
         
@@ -677,6 +727,17 @@ class HierarchicalDirectTrainer(DirectTrainer):
         # 分阶训练特有参数
         self.k = k
         self.omega_low_2 = omega_low_2
+        if omega_low_2 is None:
+            self.omega2_init = omega_low_2
+        else:
+            self.omega2_init = 100.0
+        
+        # 初始化omega2属性，避免AttributeError
+        self.omega2 = torch.tensor(
+            self.config['training']['omega2_init'], 
+            device=self.device, 
+            requires_grad=True
+        )
         
         # 根据k值调整配置
         self._adjust_config_for_k()
@@ -734,8 +795,14 @@ class HierarchicalDirectTrainer(DirectTrainer):
         if self.k > 1:
             # 对于高阶特征值，可以尝试不同的约束点位置，避开可能的节点
             x_a = 0.3  # 避开可能的节点位置
-        x_a = torch.tensor([x_a], dtype=torch.float32, device=self.device)
-        y_a = 1.0  # 振幅约束目标值
+        
+        # 确保使用正确的设备（字符串形式）
+        device_str = str(self.device)
+        if device_str.startswith('cuda:'):
+            device_str = 'cuda'
+        
+        x_a = torch.tensor([x_a], dtype=torch.float32, device=device_str).reshape(-1, 1)
+        y_a = torch.tensor([1.0], dtype=torch.float32, device=device_str)  # 振幅约束目标值，确保设备一致性
         
         # 使用模型的总损失函数，传入k参数
         total_loss, loss_dict = self.model.compute_total_loss(
@@ -857,12 +924,12 @@ class HierarchicalDirectTrainer(DirectTrainer):
     
     def _switch_to_lbfgs(self):
         """切换到L-BFGS优化器"""
-        # 获取当前模型参数和特征值参数
+        # 获取当前模型参数
         model_params = list(self.model.parameters())
         
         # 创建L-BFGS优化器
         self.optimizer = optim.LBFGS(
-            model_params + [self.omega2],
+            model_params,
             lr=1.0,  # L-BFGS的学习率通常设为1
             max_iter=20,
             tolerance_grad=1e-7,
@@ -877,7 +944,7 @@ class HierarchicalDirectTrainer(DirectTrainer):
         self.logger.info("已切换到L-BFGS优化器")
 
 
-def create_hierarchical_trainer(model, data_gen, k=1, omega_low_2=None, config=None, device='cpu', save_dir='results'):
+def create_hierarchical_trainer(model, data_gen, k=1, omega_low_2=None, config=None, device='cuda', save_dir='results'):
     """
     创建分阶训练器的便捷函数
     

@@ -30,7 +30,11 @@ class MIM1(nn.Module):
         super(MIM1, self).__init__()
         self.width = width
         self.depth = depth
+        # 创建omega2参数时先不指定设备，在模型初始化后通过to(device)统一移动
         self.omega2 = nn.Parameter(torch.tensor(100.0, dtype=torch.float32, requires_grad=True))
+        
+        # 注册omega2参数，确保它能正确跟随模型设备移动
+        self.register_parameter('omega2', self.omega2)
         
         # 输入层，将1维输入映射到width维
         self.input_layer = nn.Linear(1, width)
@@ -128,14 +132,22 @@ class MIMHomPINNFusion(nn.Module):
     MIM与HomPINNs融合模型
     结合MIM的一阶系统转化方法和HomPINNs的同伦多解探索方法
     """
-    def __init__(self, width=30, depth=2, model_type='MIM1', device='cpu'):
+    def __init__(self, width=30, depth=2, model_type='MIM1', device='cuda'):
         super(MIMHomPINNFusion, self).__init__()
         self.model_type = model_type
-        self.device = device
         
         # 确保device是字符串而不是字典
         if isinstance(device, dict) and 'device' in device:
             device = device['device']
+        
+        # 设置设备 - 统一处理设备参数
+        if isinstance(device, torch.device):
+            self.device = device
+        elif isinstance(device, str):
+            self.device = torch.device(device)
+        else:
+            # 默认使用cuda
+            self.device = torch.device('cuda')
         
         # 根据模型类型创建网络
         if model_type == 'MIM1':
@@ -146,7 +158,32 @@ class MIMHomPINNFusion(nn.Module):
             raise ValueError(f"不支持的模型类型: {model_type}")
             
         # 将模型移动到指定设备
-        self.model = self.model.to(device)
+        self.model = self.model.to(self.device)
+        # 确保设备一致性
+        self._ensure_device_consistency()
+    
+    def _ensure_device_consistency(self):
+        """
+        确保所有模型参数都在正确的设备上
+        """
+        # 首先将整个模型移动到正确设备
+        self.model = self.model.to(self.device)
+        
+        # 检查模型所有参数是否在正确设备上
+        for name, param in self.model.named_parameters():
+            if param.device != self.device:
+                print(f"警告: 参数 {name} 设备不一致: {param.device} vs {self.device}")
+                # 将参数移动到正确设备
+                param.data = param.data.to(self.device)
+                if param.grad is not None:
+                    param.grad.data = param.grad.data.to(self.device)
+        
+        # 检查模型所有缓冲区是否在正确设备上
+        for name, buffer in self.model.named_buffers():
+            if buffer.device != self.device:
+                print(f"警告: 缓冲区 {name} 设备不一致: {buffer.device} vs {self.device}")
+                # 将缓冲区移动到正确设备
+                buffer.data = buffer.data.to(self.device)
     
     def check_device_consistency(self, *tensors, device=None):
         """
@@ -191,31 +228,36 @@ class MIMHomPINNFusion(nn.Module):
         
         # 计算各阶导数
         try:
+            # 确保使用正确的设备（字符串形式）
+            device_str = str(self.device)
+            if device_str.startswith('cuda:'):
+                device_str = 'cuda'
+            
             y1_x = torch.autograd.grad(
                 outputs=y1, 
                 inputs=x, 
-                grad_outputs=torch.ones_like(y1, device=self.device), 
+                grad_outputs=torch.ones_like(y1, device=device_str), 
                 create_graph=True, 
                 retain_graph=True
             )[0]        
             y2_x = torch.autograd.grad(
                 outputs=y1_x, 
                 inputs=x, 
-                grad_outputs=torch.ones_like(y1_x, device=self.device), 
+                grad_outputs=torch.ones_like(y1_x, device=device_str), 
                 create_graph=True, 
                 retain_graph=True
             )[0]
             y3_x = torch.autograd.grad(
                 outputs=y2_x, 
                 inputs=x, 
-                grad_outputs=torch.ones_like(y2_x, device=self.device), 
+                grad_outputs=torch.ones_like(y2_x, device=device_str), 
                 create_graph=True, 
                 retain_graph=True
             )[0]
             y4_x = torch.autograd.grad(
                 outputs=y3_x, 
                 inputs=x, 
-                grad_outputs=torch.ones_like(y3_x, device=self.device), 
+                grad_outputs=torch.ones_like(y3_x, device=device_str), 
                 create_graph=True, 
                 retain_graph=True
             )[0]
@@ -307,6 +349,11 @@ class MIMHomPINNFusion(nn.Module):
         # 计算起始系统损失G（基于HomPINNs论文正确方法）
         # 起始系统: y^(4) - ω₀²y = 0, 解析解为 y_s(x) = sin(kπx)
         omega0_2 = (k * torch.pi)**4
+        
+        # 确保使用正确的设备（字符串形式）
+        device_str = str(self.device)
+        if device_str.startswith('cuda:'):
+            device_str = 'cuda'
         
         # 计算起始函数真实值及其导数（确保在同一设备上）
         y_s = torch.sin(k * torch.pi * x)  # 起始函数: y_s(x) = sin(kπx)
@@ -403,31 +450,28 @@ class MIMHomPINNFusion(nn.Module):
         except Exception as e:
             raise RuntimeError(f"计算导数时出错: {e}")
         
-        # 确保所有张量形状一致（一维）
-        y1_x = y1_x.squeeze()
-        y2_x = y2_x.squeeze()
-        y3_x = y3_x.squeeze()
-        y4_x = y4_x.squeeze()
-        
-        # 计算残差项
+        # 计算残差项（保持张量形状，避免squeeze操作）
         R1 = y2 - y1_x  # y2 - y1' = 0
         R2 = y3 - y2_x  # y3 - y2' = 0
         R3 = y4 - y3_x  # y4 - y3' = 0
         
-        # 确保x是标量或与其他张量形状匹配
+        # 确保x与其他张量形状匹配
         if len(x.shape) > 1:
-            x = x.squeeze()
-        R4 = (y4_x - ((T + v*x) * y3 - v * y2 - omega2_val * y1))  # y4' - ((T+vx)y'' - vy' - ω²y) = 0
+            x_reshaped = x.squeeze()
+        else:
+            x_reshaped = x
         
-        # 在返回前确保所有残差项都是标量
-        # 为了调试，我们直接返回每个残差项的最小二乘损失
-        R1 = (R1**2).mean()
-        R2 = (R2**2).mean()
-        R3 = (R3**2).mean()
-        R4 = (R4**2).mean()
+        # 计算R4残差项，确保所有操作都在计算图中
+        R4 = (y4_x - ((T + v*x_reshaped) * y3 - v * y2 - omega2_val * y1))  # y4' - ((T+vx)y'' - vy' - ω²y) = 0
         
-        # 计算损失，确保是标量
-        L_r = R1 + R2 + R3 + R4
+        # 计算每个残差项的均方损失，保持梯度计算链
+        R1_loss = (R1**2).mean()
+        R2_loss = (R2**2).mean()
+        R3_loss = (R3**2).mean()
+        R4_loss = (R4**2).mean()
+        
+        # 计算总残差损失
+        L_r = R1_loss + R2_loss + R3_loss + R4_loss
         
         return L_r, y1, y2, y3, y4, omega2_val
     
@@ -448,10 +492,8 @@ class MIMHomPINNFusion(nn.Module):
         # 前向传播
         y1, y2, y3, y4, omega2 = self.forward(x_b)
 
-        y1 = y1.squeeze()
-        y3 = y3.squeeze()
-        
         # 边界条件残差: y1(0)=0, y1(1)=0, y3(0)=0, y3(1)=0
+        # 避免squeeze操作，直接计算均方损失
         L_b = (y1**2).mean() + (y3**2).mean()
         
         return L_b

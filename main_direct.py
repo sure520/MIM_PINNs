@@ -75,10 +75,10 @@ def run_hierarchical_training(k_max, config, device, save_dir):
             # 创建模型
             if k == 1:
                 # 第一阶训练，创建新模型
-                model = MIMHomPINNFusion()
+                model = MIMHomPINNFusion(device=device)
             else:
                 # 高阶训练，加载前一阶的模型参数
-                model = MIMHomPINNFusion()
+                model = MIMHomPINNFusion(device=device)
                 model_path = os.path.join(save_dir, "models", f"model_k{k-1}.pth")
                 if os.path.exists(model_path):
                     checkpoint = torch.load(model_path, map_location=device)
@@ -370,7 +370,7 @@ def main(config_type='balanced', k_max=3, **kwargs):
         raise RuntimeError(f"配置加载失败: {e}")
     
     # 2. 设置设备
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda')
     print(f"使用设备: {device}")
     
     # 3. 创建保存目录

@@ -1,5 +1,0 @@
-{
-    "1": {
-        "error": "a Tensor with 1000 elements cannot be converted to Scalar"
-    }
-}
