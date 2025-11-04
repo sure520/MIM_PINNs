@@ -19,11 +19,7 @@ OPTIMIZED_TRAINING_CONFIG = {
     'decay_rate': 0.95,             # 学习率衰减率（更平缓的衰减）
     'alpha': 10,                    # 边界惩罚系数（保持强约束）
     'omega2_init': 1.0,             # 特征值初始猜测
-<<<<<<< HEAD
-    'homotopy_init_ks': [1, 2, 3, 4, 5],  # 多起始函数探索
-=======
     'homotopy_init_ks': [3, 4, 5],  # 多起始函数探索
->>>>>>> 427c4e7a161cedc628bf7a527615f8d9abe2a2af
     'solution_threshold': 0.05,     # 解差异阈值（更严格的解筛选）
     'max_solutions': 10,            # 最大解数量（充分探索解空间）
     'verbose': 1,                   # 日志打印频率
@@ -50,11 +46,7 @@ DEVICE_CONFIG = {
 
 # 保存配置
 SAVE_CONFIG = {
-<<<<<<< HEAD
-    'save_dir': 'optimized_results', # 保存目录
-=======
     'save_dir': 'results', # 保存目录
->>>>>>> 427c4e7a161cedc628bf7a527615f8d9abe2a2af
     'save_models': True,            # 是否保存模型
     'save_plots': True,             # 是否保存图像
 }

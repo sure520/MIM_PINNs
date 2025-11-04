@@ -7,7 +7,7 @@
 DIRECT_TRAINER_CONFIG = {
     'training': {
         'lr': 0.001,                    # 学习率
-        'epochs': 20000,                # 训练轮数
+        'epochs': 50000,                # 训练轮数
         'optimizer': 'adam',            # 优化器类型
         'lr_scheduler': 'step',         # 学习率调度器
         'lr_decay_rate': 0.95,          # 学习率衰减率

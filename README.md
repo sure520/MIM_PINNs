@@ -62,6 +62,20 @@ H(u, t) = (1 - t) G(u) + t F(u)
 - G(u) 是起始系统残差
 - F(u) 是目标系统残差
 
+### 直接训练方法
+
+除了同伦训练外，项目还提供了直接训练方法，不使用同伦步骤，直接对目标系统进行训练：
+
+```
+H(u, t) = F(u)  (t = 1.0)
+```
+
+直接训练方法的优势：
+- 训练过程更简单直接
+- 计算开销更小
+- 适合简单问题或快速验证
+- 可以作为同伦训练的基准比较
+
 ### 网络架构
 
 支持两种网络架构：
@@ -84,16 +98,22 @@ y3(x) = x(1 - x) N3(x)
 
 ```
 MIM_HomPINNs_Fusion/
-├── main.py                 # 主程序
+├── main.py                 # 主程序（同伦训练版本）
+├── main_direct.py          # 直接训练主程序（无同伦步骤）
+├── main_optimized.py       # 优化版本主程序
 ├── models/
 │   └── fusion_model.py     # 融合模型
 ├── utils/
 │   ├── data_generator.py   # 数据生成器
-│   ├── training.py         # 训练器
+│   ├── training.py         # 训练器（同伦训练）
+│   ├── direct_training.py  # 直接训练器（无同伦步骤）
 │   ├── evaluation.py       # 评估器
 │   └── visualization.py    # 可视化器
 ├── configs/
 │   └── config.py           # 配置文件
+├── test/
+│   ├── test_run_training.py    # 同伦训练测试
+│   └── test_direct_training.py # 直接训练测试
 ├── results/                # 结果目录
 ├── requirements.txt        # 依赖文件
 └── README.md              # 项目说明
@@ -110,19 +130,31 @@ pip install -r requirements.txt
 
 #### 运行训练脚本
 
-1. 简化版训练脚本（适合快速测试）：
-```bash
-python main_simple.py
-```
-
-2. 完整版训练脚本（推荐）：
-```bash
-python main_complete.py
-```
-
-3. 原始训练脚本：
+1. **同伦训练版本**（推荐，使用同伦步骤逐步训练）：
 ```bash
 python main.py
+```
+
+2. **直接训练版本**（无同伦步骤，直接训练）：
+```bash
+python main_direct.py
+```
+
+3. **优化版本**（包含更多优化功能）：
+```bash
+python main_optimized.py
+```
+
+#### 运行测试脚本
+
+1. 测试同伦训练函数：
+```bash
+python test/test_run_training.py
+```
+
+2. 测试直接训练函数：
+```bash
+python test/test_direct_training.py
 ```
 
 ### 参数配置
