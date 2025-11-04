@@ -1,0 +1,5 @@
+{
+    "1": {
+        "error": "MIMHomPINNFusion.compute_total_loss() got an unexpected keyword argument 'omega2'"
+    }
+}

@@ -99,7 +99,7 @@ class DataGenerator:
             self.x_test.to(device)
         )
     
-    def generate_all_data(self, N_f=None, N_b=None, N_test=None, domain=None):
+    def generate_all_data(self, N_f=None, N_b=None, N_test=None, domain=None, device='cpu'):
         """
         生成所有数据（兼容直接训练器接口）
         
@@ -108,6 +108,7 @@ class DataGenerator:
             N_b: 边界点数
             N_test: 测试点数
             domain: 计算域
+            device: 设备
             
         Returns:
             x_domain: 域内点
@@ -127,9 +128,9 @@ class DataGenerator:
         # 重新生成数据
         self.generate_data()
         
-        # 返回numpy数组格式（直接训练器期望的格式）
+        # 返回PyTorch张量格式（直接训练器期望的格式）
         return (
-            self.x_domain.cpu().numpy(),
-            self.x_boundary.cpu().numpy(),
-            self.x_test.cpu().numpy()
+            self.x_domain.to(device),
+            self.x_boundary.to(device),
+            self.x_test.to(device)
         )

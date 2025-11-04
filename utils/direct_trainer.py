@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import StepLR, ExponentialLR, ReduceLROnPlateau
+from typing import override
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -107,7 +108,7 @@ class DirectTrainer:
         self.model.to(self.device)
         
         # 生成训练数据
-        self.x, self.x_b, self.x_test = data_gen.generate_all_data()
+        self.x, self.x_b, self.x_test = data_gen.generate_all_data(device=self.device)
         
         # 初始化特征值
         self.omega2 = torch.tensor(
@@ -295,7 +296,8 @@ class DirectTrainer:
         
         self.logger = logging.getLogger(__name__)
     
-    def compute_loss(self, x, x_b):
+    @override
+    def compute_loss(self, x, x_b, k=1, omega_low_2=None):
         """
         计算总损失 - 使用新的MIMHomPINNFusion模型损失函数
         
@@ -325,7 +327,8 @@ class DirectTrainer:
             x_b=x_b, 
             T=T, 
             v=v, 
-            omega2=self.omega2,
+            k=k,
+            omega_low_2=omega_low_2,
             weights={
                 'residual': 1.0,
                 'boundary': self.config['training']['alpha'],
@@ -338,30 +341,6 @@ class DirectTrainer:
         )
         
         return total_loss, loss_dict
-    
-    def _compute_pde_residual(self, y1, y2, y3, y4, omega2_val):
-        """计算PDE残差"""
-        T = self.config['equation']['T']
-        v = self.config['equation']['v']
-        
-        # 根据MIM方法的一阶系统计算残差
-        # 这里需要根据具体的PDE方程实现
-        # 示例：四阶方程 y'''' + T*y'' + v*y = omega2 * y
-        residual = y4 + T * y2 + v * y1 - omega2_val * y1
-        
-        return residual
-    
-    def _compute_boundary_loss(self, x_b):
-        """计算边界条件损失"""
-        # 获取边界点上的模型输出
-        y1_b, _, y3_b, _, _ = self.model(x_b)
-        
-        # 边界条件：y(0)=0, y(1)=0, y''(0)=0, y''(1)=0
-        bc_loss = torch.mean(y1_b**2) + torch.mean(y3_b**2)
-        
-        return bc_loss
-    
-    def _compute_nonzero_loss(self, y1):
         """计算非零解惩罚损失"""
         # 确保解不为零
         epsilon = 1e-6
@@ -439,13 +418,13 @@ class DirectTrainer:
         
         self.logger.info(log_message)
     
-    def _train_step(self):
+    def _train_step(self, k=None, omega_low_2=None):
         """单步训练"""
         self.model.train()
         self.optimizer.zero_grad()
         
         # 计算损失
-        total_loss, loss_dict = self.compute_loss(self.x, self.x_b)
+        total_loss, loss_dict = self.compute_loss(self.x, self.x_b, k=k, omega_low_2=omega_low_2)
         
         # 反向传播
         total_loss.backward()
@@ -722,7 +701,6 @@ class HierarchicalDirectTrainer(DirectTrainer):
             x_b=x_b, 
             T=T, 
             v=v, 
-            omega2=self.omega2,
             omega_low_2=self.omega_low_2,
             k=self.k,
             weights={
@@ -738,6 +716,22 @@ class HierarchicalDirectTrainer(DirectTrainer):
         
         return total_loss, loss_dict
     
+    @override
+    def _train_step(self):
+        """单步训练 - 重写父类方法，适配子类compute_loss的参数"""
+        self.model.train()
+        self.optimizer.zero_grad()
+        
+        # 计算损失 - 调用子类的compute_loss方法，不传入k和omega_low_2参数
+        # 因为子类的compute_loss方法内部已经使用了self.k和self.omega_low_2
+        total_loss, loss_dict = self.compute_loss(self.x, self.x_b)
+        
+        # 反向传播
+        total_loss.backward()
+        self.optimizer.step()
+        
+        return total_loss, loss_dict
+    
     def train(self):
         """执行分阶训练循环"""
         self.start_time = time.time()
@@ -748,7 +742,7 @@ class HierarchicalDirectTrainer(DirectTrainer):
         for epoch in pbar:
             self.epoch = epoch
             
-            # 单步训练
+            # 单步训练 - 现在调用的是子类重写的_train_step方法
             train_loss, loss_dict = self._train_step()
             
             # 记录损失

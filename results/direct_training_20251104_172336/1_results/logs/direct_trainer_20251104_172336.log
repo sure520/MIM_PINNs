@@ -1,0 +1,37 @@
+2025-11-04 17:23:37,933 - INFO - 优化器设置完成: adam
+2025-11-04 17:23:37,934 - INFO - 直接训练器初始化完成
+2025-11-04 17:23:37,935 - INFO - 设备: cpu
+2025-11-04 17:23:37,936 - INFO - 保存目录: results\direct_training_20251104_172336\1_results
+2025-11-04 17:23:37,936 - INFO - 配置: {
+  "training": {
+    "lr": 0.001,
+    "epochs": 50000,
+    "optimizer": "adam",
+    "lr_scheduler": "step",
+    "lr_decay_rate": 0.95,
+    "lr_decay_steps": 5000,
+    "omega2_init": 1.0,
+    "alpha": 10.0,
+    "beta": 0.0001,
+    "verbose": 1,
+    "save_interval": 1000,
+    "early_stopping": true,
+    "patience": 1000,
+    "min_delta": 1e-06
+  },
+  "data": {
+    "N_f": 5000,
+    "N_b": 200,
+    "N_test": 1000,
+    "domain": [
+      0,
+      1
+    ]
+  },
+  "equation": {
+    "T": 600,
+    "v": 50
+  }
+}
+2025-11-04 17:23:37,938 - INFO - 一阶特征值训练配置: epochs=30000, lr=0.001, omega2_init=100.0
+2025-11-04 17:23:37,938 - INFO - 分阶训练器初始化完成，当前训练第1阶特征值

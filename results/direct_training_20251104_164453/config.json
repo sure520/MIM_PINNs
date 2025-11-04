@@ -1,0 +1,31 @@
+{
+    "training": {
+        "lr": 0.001,
+        "epochs": 50000,
+        "optimizer": "adam",
+        "lr_scheduler": "step",
+        "lr_decay_rate": 0.95,
+        "lr_decay_steps": 5000,
+        "omega2_init": 1.0,
+        "alpha": 10.0,
+        "beta": 0.0001,
+        "verbose": 1,
+        "save_interval": 1000,
+        "early_stopping": true,
+        "patience": 1000,
+        "min_delta": 1e-06
+    },
+    "data": {
+        "N_f": 5000,
+        "N_b": 200,
+        "N_test": 1000,
+        "domain": [
+            0,
+            1
+        ]
+    },
+    "equation": {
+        "T": 600,
+        "v": 50
+    }
+}
