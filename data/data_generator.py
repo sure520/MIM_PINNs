@@ -40,13 +40,16 @@ class DataGenerator:
         self.x_domain = torch.tensor(x_domain, dtype=torch.float32).unsqueeze(1)
         
         # 生成边界点
-        x_boundary = np.array([self.domain[0], self.domain[1]])
         # 重复边界点以达到所需数量
+        n_0 = self.n_boundary // 2
+        n_1 = self.n_boundary - n_0
         if self.n_boundary > 2:
             x_boundary = np.concatenate([
-                x_boundary,
-                np.random.uniform(self.domain[0], self.domain[1], self.n_boundary - 2)
+                np.full(n_0, self.domain[0]),
+                np.full(n_1, self.domain[1])
             ])
+            # 打乱顺序（可选，让 0 和 1 随机分布）
+            np.random.shuffle(x_boundary)
         self.x_boundary = torch.tensor(x_boundary, dtype=torch.float32).unsqueeze(1)
         
         # 生成测试点

@@ -58,7 +58,7 @@ def validate_imports():
         print("✓ 配置创建成功")
         
         # 测试训练器创建
-        trainer = DirectTrainer(model, data_gen, config, device, 'test_validate')
+        trainer = DirectTrainer(model, data_gen, config, 'balanced', device, 'test_validate')
         print("✓ 训练器创建成功")
         
         # 测试便捷函数
@@ -66,8 +66,12 @@ def validate_imports():
         print("✓ 便捷函数创建成功")
         
         # 测试损失计算
-        total_loss, pde_loss, bc_loss, nonzero_loss = trainer.compute_loss(trainer.x, trainer.x_b)
+        total_loss, loss_dict = trainer.compute_loss(trainer.x, trainer.x_b)
         print(f"✓ 损失计算成功: Total={total_loss.item():.4f}")
+        print(f"  详细损失: Residual={loss_dict['residual_loss'].item():.4f}, "
+              f"Boundary={loss_dict['boundary_loss'].item():.4f}, "
+              f"Amplitude={loss_dict['amplitude_loss'].item():.4f}, "
+              f"Nonzero={loss_dict['nonzero_loss'].item():.4f}")
         
         print("\n🎉 所有验证通过！代码结构正确。")
         return True

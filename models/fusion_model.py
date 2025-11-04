@@ -62,12 +62,6 @@ class MIM1(nn.Module):
         # 强制omega2为标量（取第一个元素，确保全局常数）
         omega2 = omega2[0]
         omega2 = omega2.repeat(x.shape[0])  # 广播到与x同长度
-        
-        # 边界条件处理：确保y1(0)=y1(1)=0和y3(0)=y3(1)=0
-        # 通过乘以x(1-x)因子自动满足边界条件
-        boundary_factor = x[:, 0] * (1 - x[:, 0])
-        y1 = y1 * boundary_factor
-        y3 = y3 * boundary_factor
             
         return y1, y2, y3, y4, omega2
 
@@ -190,45 +184,51 @@ class MIMHomPINNFusion(nn.Module):
             R1, R2, R3, R4: 各个残差项
             y1, y2, y3, y4, omega2_val: 各个变量值
         """
+        # 确保x有requires_grad=True
+        x.requires_grad_(True)
+        
         # 前向传播
         y1, y2, y3, y4, omega2_val = self.forward(x)
         
         # 如果提供了omega2，则使用提供的值
         if omega2 is not None:
+            # 确保omega2有梯度
+            if not isinstance(omega2, torch.nn.Parameter) and not omega2.requires_grad:
+                omega2 = omega2.clone().detach().requires_grad_(True)
             omega2_val = omega2_val * 0 + omega2  # 保持形状但使用提供的值
         
         # 计算各阶导数
-        y1_x = torch.autograd.grad(
-            outputs=y1, 
-            inputs=x, 
-            grad_outputs=torch.ones_like(y1), 
-            create_graph=True, 
-            retain_graph=True
-        )[0]
-        
-        y2_x = torch.autograd.grad(
-            outputs=y2, 
-            inputs=x, 
-            grad_outputs=torch.ones_like(y2), 
-            create_graph=True, 
-            retain_graph=True
-        )[0]
-        
-        y3_x = torch.autograd.grad(
-            outputs=y3, 
-            inputs=x, 
-            grad_outputs=torch.ones_like(y3), 
-            create_graph=True, 
-            retain_graph=True
-        )[0]
-        
-        y4_x = torch.autograd.grad(
-            outputs=y4, 
-            inputs=x, 
-            grad_outputs=torch.ones_like(y4), 
-            create_graph=True, 
-            retain_graph=True
-        )[0]
+        try:
+            y1_x = torch.autograd.grad(
+                outputs=y1, 
+                inputs=x, 
+                grad_outputs=torch.ones_like(y1, device=self.device), 
+                create_graph=True, 
+                retain_graph=True
+            )[0]        
+            y2_x = torch.autograd.grad(
+                outputs=y2, 
+                inputs=x, 
+                grad_outputs=torch.ones_like(y2, device=self.device), 
+                create_graph=True, 
+                retain_graph=True
+            )[0]
+            y3_x = torch.autograd.grad(
+                outputs=y3, 
+                inputs=x, 
+                grad_outputs=torch.ones_like(y3, device=self.device), 
+                create_graph=True, 
+                retain_graph=True
+            )[0]
+            y4_x = torch.autograd.grad(
+                outputs=y4, 
+                inputs=x, 
+                grad_outputs=torch.ones_like(y4, device=self.device), 
+                create_graph=True, 
+                retain_graph=True
+            )[0]
+        except Exception as e:
+            raise RuntimeError(f"计算导数时出错: {e}")
         
         # 确保所有张量形状一致（一维）
         y1_x = y1_x.squeeze()
@@ -243,7 +243,17 @@ class MIMHomPINNFusion(nn.Module):
         
         # R4残差量级归一化：降低变系数项权重，避免网络"避重就轻"
         beta = 1e-4  # 归一化系数
+        # 确保x是标量或与其他张量形状匹配
+        if len(x.shape) > 1:
+            x = x.squeeze()
         R4 = beta * (y4_x - ((T + v*x) * y2_x + v * y1_x + omega2_val * y1))  # y4' - ((T+vx)y'' + vy' + ω²y) = 0
+        
+        # 在返回前确保所有残差项都是标量
+        # 为了调试，我们直接返回每个残差项的均值
+        R1 = R1.mean()
+        R2 = R2.mean()
+        R3 = R3.mean()
+        R4 = R4.mean()
         
         return R1, R2, R3, R4, y1, y2, y3, y4, omega2_val, y1_x, y2_x, y3_x, y4_x
     
@@ -356,17 +366,32 @@ class MIMHomPINNFusion(nn.Module):
             v: 方程参数v
             omega2: 特征值
         Returns:
-            L_r: 残差损失
+            L_r: 残差损失（标量）
             y1, y2, y3, y4, omega2_val: 各变量值
         """
+        if len(x.shape) == 1:
+            x = x.reshape(-1, 1).requires_grad_(True)
+        
+        # 计算残差
         R1, R2, R3, R4, y1, y2, y3, y4, omega2_val, y1_x, y2_x, y3_x, y4_x = self.compute_residuals(x, T, v, omega2)
         
-        # 残差损失：L_r = (R1^2 + R2^2 + R3^2 + R4^2)的均值
-        L_r = (R1**2 + R2**2 + R3**2 + R4**2).mean()
+        # 计算总残差平方和的均值，确保是标量
+        # 先对每个残差项单独求均值，然后再相加
+        R1_mean = R1.mean()
+        R2_mean = R2.mean()
+        R3_mean = R3.mean()
+        R4_mean = R4.mean()
+        
+        # 计算损失，确保是标量
+        L_r = R1_mean**2 + R2_mean**2 + R3_mean**2 + R4_mean**2
+        
+        # 最后确保是标量
+        if len(L_r.shape) > 0:
+            L_r = L_r.mean()
         
         return L_r, y1, y2, y3, y4, omega2_val
     
-    def compute_boundary_loss(self, x_b):
+    def compute_boundary_loss(self, x_b, T=600, v=50, omega2=None):
         """
         计算边界条件损失 L_b（硬约束保障）
         
@@ -374,11 +399,19 @@ class MIMHomPINNFusion(nn.Module):
         
         Args:
             x_b: 边界点
+            T: 方程参数T
+            v: 方程参数v
+            omega2: 特征值
         Returns:
-            L_b: 边界损失
+            L_b: 边界损失（标量）
         """
         R_b, y1_b, y3_b = self.compute_boundary_residuals(x_b)
         L_b = R_b.mean()
+        
+        # 确保是标量
+        if len(L_b.shape) > 0:
+            L_b = L_b.mean()
+            
         return L_b
     
     def compute_amplitude_constraint_loss(self, x_a, y_a=1.0, T=600, v=50, omega2=None):
@@ -397,12 +430,18 @@ class MIMHomPINNFusion(nn.Module):
         Returns:
             L_a: 振幅约束损失
         """
-        # 确保x_a是tensor格式
+        # 确保x_a是tensor格式，并且是二维的 [n, 1]
         if not isinstance(x_a, torch.Tensor):
-            x_a = torch.tensor([x_a], dtype=torch.float32, device=self.device).requires_grad_(True)
+            x_a = torch.tensor([[x_a]], dtype=torch.float32, device=self.device).requires_grad_(True)
+        elif len(x_a.shape) == 1:
+            x_a = x_a.reshape(-1, 1).requires_grad_(True)
         
         # 在约束点处计算解的值
-        y1_a = self.forward(x_a)[:, 0]  # 获取y1在约束点处的值
+        y1_a, _, _, _, _ = self.forward(x_a)
+        
+        # 确保y_a是正确形状的tensor
+        if not isinstance(y_a, torch.Tensor):
+            y_a = torch.tensor(y_a, dtype=torch.float32, device=self.device)
         
         # 振幅约束损失：在约束点处解的值与目标值的平方差
         L_a = (y1_a - y_a)**2
@@ -422,7 +461,7 @@ class MIMHomPINNFusion(nn.Module):
             epsilon: 安全边际（默认5.0）
             a: 缩放参数（默认20.0）
         Returns:
-            L_c: 特征值层级约束损失
+            L_c: 特征值层级约束损失（标量）
         """
         # 对于一阶特征值(k=1)，不使用层级约束，直接返回0
         if k <= 1:
@@ -433,6 +472,10 @@ class MIMHomPINNFusion(nn.Module):
         z = a * (omega2_val - (omega_low_2 + epsilon))
         sigma_z = 1.0 / (1.0 + torch.exp(-z))  # Sigmoid函数
         L_c = -sigma_z + 1.0
+        
+        # 确保返回的是标量张量
+        if len(L_c.shape) > 0:
+            L_c = L_c.mean()
         
         return L_c
     
@@ -446,13 +489,21 @@ class MIMHomPINNFusion(nn.Module):
             y1: 主要解变量（位移）
             epsilon: 数值稳定项（默认1e-6）
         Returns:
-            L_nz: 非零解惩罚损失
+            L_nz: 非零解惩罚损失（标量）
         """
-        # 解的L2范数平方：||y||₂² = (1/N) Σ y(x_i)²
-        y_norm_squared = (y1**2).mean()
+        # 确保y1是正确形状的tensor
+        if not isinstance(y1, torch.Tensor):
+            y1 = torch.tensor(y1, dtype=torch.float32, device=self.device)
         
-        # 非零解惩罚：L_nz = 1 / (||y||₂² + ε)
+        # 解的L2范数平方：||y||₂² = (1/N) Σ y(x_i)²，确保是标量
+        y_norm_squared = (y1**2).mean()
+        if len(y_norm_squared.shape) > 0:
+            y_norm_squared = y_norm_squared.mean()
+        
+        # 非零解惩罚：L_nz = 1 / (||y||₂² + ε)，确保是标量
         L_nz = 1.0 / (y_norm_squared + epsilon)
+        if len(L_nz.shape) > 0:
+            L_nz = L_nz.mean()
         
         return L_nz
     
@@ -478,7 +529,7 @@ class MIMHomPINNFusion(nn.Module):
             a: 层级约束缩放参数
             epsilon_nonzero: 非零解惩罚数值稳定项
         Returns:
-            total_loss: 总损失
+            total_loss: 总损失（标量）
             loss_dict: 各损失项详细值
         """
         # 默认权重设置（可根据训练阶段动态调整）
@@ -495,32 +546,60 @@ class MIMHomPINNFusion(nn.Module):
         
         weights = default_weights
         
+        # 确保所有输入都是在正确的设备上并且需要梯度
+        x = x.to(self.device).requires_grad_(True)
+        x_b = x_b.to(self.device).requires_grad_(True)
+        
         # 计算各损失项
         # 1. 控制方程残差损失
         L_r, y1, y2, y3, y4, omega2_val = self.compute_residual_loss(x, T, v, omega2)
+        # 确保L_r是标量
+        L_r = L_r.mean() if len(L_r.shape) > 0 else L_r
         
         # 2. 边界条件损失
         L_b = self.compute_boundary_loss(x_b)
+        # 确保L_b是标量
+        L_b = L_b.mean() if len(L_b.shape) > 0 else L_b
         
         # 3. 振幅约束损失
-        # 注意：振幅约束需要在特定配点处计算，这里使用x_a作为约束点
         L_a = self.compute_amplitude_constraint_loss(x_a, y_a, T, v, omega2)
+        # 确保L_a是标量
+        L_a = L_a.mean() if len(L_a.shape) > 0 else L_a
         
-        # 4. 特征值层级约束损失（如果有低阶特征值且k>1）
+        # 4. 特征值层级约束损失
         if omega_low_2 is not None and k > 1:
             L_c = self.compute_eigenvalue_hierarchy_loss(omega2_val, omega_low_2, k, epsilon_hierarchy, a)
+            # 确保L_c是标量
+            L_c = L_c.mean() if len(L_c.shape) > 0 else L_c
         else:
             L_c = torch.tensor(0.0, device=self.device)
         
         # 5. 非零解惩罚损失
         L_nz = self.compute_nonzero_solution_loss(y1, epsilon_nonzero)
+        # 确保L_nz是标量
+        L_nz = L_nz.mean() if len(L_nz.shape) > 0 else L_nz
+        
+        # 计算加权损失项，确保每一步都是标量操作
+        weighted_L_r = weights['residual'] * L_r
+        weighted_L_r = weighted_L_r.mean() if len(weighted_L_r.shape) > 0 else weighted_L_r
+        
+        weighted_L_b = weights['boundary'] * L_b
+        weighted_L_b = weighted_L_b.mean() if len(weighted_L_b.shape) > 0 else weighted_L_b
+        
+        weighted_L_a = weights['amplitude'] * L_a
+        weighted_L_a = weighted_L_a.mean() if len(weighted_L_a.shape) > 0 else weighted_L_a
+        
+        weighted_L_c = weights['hierarchy'] * L_c
+        weighted_L_c = weighted_L_c.mean() if len(weighted_L_c.shape) > 0 else weighted_L_c
+        
+        weighted_L_nz = weights['nonzero'] * L_nz
+        weighted_L_nz = weighted_L_nz.mean() if len(weighted_L_nz.shape) > 0 else weighted_L_nz
         
         # 计算总损失
-        total_loss = (weights['residual'] * L_r + 
-                     weights['boundary'] * L_b + 
-                     weights['amplitude'] * L_a + 
-                     weights['hierarchy'] * L_c + 
-                     weights['nonzero'] * L_nz)
+        total_loss = weighted_L_r + weighted_L_b + weighted_L_a + weighted_L_c + weighted_L_nz
+        
+        # 最后确保总损失是标量
+        total_loss = total_loss.mean() if len(total_loss.shape) > 0 else total_loss
         
         # 返回详细损失信息
         loss_dict = {

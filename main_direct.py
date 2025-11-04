@@ -95,7 +95,7 @@ def run_hierarchical_training(k_max, config, device, save_dir):
                 omega_low_2=omega_low_2,
                 config=config,
                 device=device,
-                save_dir=os.path.join(save_dir, f'k{k}_results')
+                save_dir=os.path.join(save_dir, f'{k}_results')
             )
             
             # 开始训练
@@ -367,37 +367,7 @@ def main(config_type='balanced', k_max=3, **kwargs):
         # 打印配置摘要
         print_config_summary(config, f"{config_type} 配置")
     except Exception as e:
-        print(f"配置加载失败: {e}")
-        # 使用默认配置
-        config = {
-            'training': {
-                'lr': 0.001,
-                'epochs': 5000,
-                'optimizer': 'adam',
-                'lr_scheduler': 'step',
-                'lr_decay_rate': 0.95,
-                'lr_decay_steps': 1000,
-                'omega2_init': 1.0,
-                'alpha': 10.0,
-                'beta': 1e-4,
-                'verbose': 1,
-                'save_interval': 500,
-                'early_stopping': True,
-                'patience': 500,
-                'min_delta': 1e-6
-            },
-            'data': {
-                'N_f': 2000,
-                'N_b': 100,
-                'N_test': 200,
-                'domain': [0, 1]
-            },
-            'equation': {
-                'T': 600,
-                'v': 50
-            }
-        }
-        print("使用默认配置")
+        raise RuntimeError(f"配置加载失败: {e}")
     
     # 2. 设置设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

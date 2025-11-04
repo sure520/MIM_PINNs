@@ -107,22 +107,12 @@ class DirectTrainer:
         self.model.to(self.device)
         
         # 生成训练数据
-        self.x, self.x_b, self.x_test = data_gen.generate_all_data(
-            N_f=self.config['data']['N_f'],
-            N_b=self.config['data']['N_b'],
-            N_test=self.config['data']['N_test'],
-            domain=self.config['data']['domain']
-        )
-        
-        # 转换为tensor并移动到设备
-        self.x = torch.tensor(self.x, dtype=torch.float32, requires_grad=True).to(self.device)
-        self.x_b = torch.tensor(self.x_b, dtype=torch.float32).to(self.device)
-        self.x_test = torch.tensor(self.x_test, dtype=torch.float32).to(self.device)
+        self.x, self.x_b, self.x_test = data_gen.generate_all_data()
         
         # 初始化特征值
         self.omega2 = torch.tensor(
             self.config['training']['omega2_init'], 
-            device=device, 
+            device=self.device, 
             requires_grad=True
         )
         
@@ -238,13 +228,18 @@ class DirectTrainer:
     
     def _setup_optimizer(self):
         """设置优化器"""
-        # 获取模型参数和特征值参数
+        # 获取模型参数
         model_params = list(self.model.parameters())
-        omega2_param = torch.nn.Parameter(torch.tensor([self.config['training']['omega2_init']], dtype=torch.float32))
+        
+        # 确保特征值参数在正确设备上并设置requires_grad
+        if not isinstance(self.omega2, torch.nn.Parameter):
+            self.omega2 = torch.nn.Parameter(
+                torch.tensor([self.config['training']['omega2_init']], dtype=torch.float32, device=self.device),
+                requires_grad=True
+            )
         
         # 分别优化模型参数和特征值
-        self.optimizer = self._create_optimizer(model_params + [omega2_param])
-        self.omega2 = omega2_param
+        self.optimizer = self._create_optimizer(model_params + [self.omega2])
         
         self.logger.info(f"优化器设置完成: {self.config['training']['optimizer']}")
         
@@ -288,12 +283,12 @@ class DirectTrainer:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         log_file = os.path.join(log_dir, f'direct_trainer_{timestamp}.log')
         
-        # 配置日志
+        # 配置日志 - 使用UTF-8编码避免中文乱码
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler(log_file),
+                logging.FileHandler(log_file, encoding='utf-8'),
                 logging.StreamHandler()
             ]
         )
@@ -312,6 +307,10 @@ class DirectTrainer:
             total_loss: 总损失
             loss_dict: 各损失项详细值
         """
+        # 确保x和x_b有requires_grad=True
+        x.requires_grad_(True)
+        x_b.requires_grad_(True)
+        
         # 获取方程参数
         T = self.config['equation']['T']
         v = self.config['equation']['v']
@@ -692,9 +691,18 @@ class HierarchicalDirectTrainer(DirectTrainer):
             x_b: 边界点
             
         Returns:
-            total_loss: 总损失
+            total_loss: 总损失（标量）
             loss_dict: 各损失项详细值
         """
+        # 确保x和x_b有requires_grad=True，并且是二维张量
+        x.requires_grad_(True)
+        if len(x.shape) == 1:
+            x = x.reshape(-1, 1).requires_grad_(True)
+        
+        x_b.requires_grad_(True)
+        if len(x_b.shape) == 1:
+            x_b = x_b.reshape(-1, 1).requires_grad_(True)
+        
         # 获取方程参数
         T = self.config['equation']['T']
         v = self.config['equation']['v']
