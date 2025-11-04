@@ -796,13 +796,12 @@ class HierarchicalDirectTrainer(DirectTrainer):
             # 对于高阶特征值，可以尝试不同的约束点位置，避开可能的节点
             x_a = 0.3  # 避开可能的节点位置
         
-        # 确保使用正确的设备（字符串形式）
-        device_str = str(self.device)
-        if device_str.startswith('cuda:'):
-            device_str = 'cuda'
+        # 确保使用正确的设备
+        device = self.device
         
-        x_a = torch.tensor([x_a], dtype=torch.float32, device=device_str).reshape(-1, 1)
-        y_a = torch.tensor([1.0], dtype=torch.float32, device=device_str)  # 振幅约束目标值，确保设备一致性
+        # 创建振幅约束张量，确保requires_grad=True
+        x_a_tensor = torch.tensor([[x_a]], dtype=torch.float32, device=device).requires_grad_(True)
+        y_a_tensor = torch.tensor([[1.0]], dtype=torch.float32, device=device).requires_grad_(True)  # 振幅约束目标值，也需要梯度，保持二维形状
         
         # 使用模型的总损失函数，传入k参数
         total_loss, loss_dict = self.model.compute_total_loss(
@@ -819,8 +818,8 @@ class HierarchicalDirectTrainer(DirectTrainer):
                 'hierarchy': 100.0 if self.k > 1 else 0.0,  # 只对高阶特征值使用层级约束
                 'nonzero': self.config['training']['beta']
             },
-            x_a=x_a,
-            y_a=y_a
+            x_a=x_a_tensor,
+            y_a=y_a_tensor
         )
         
         return total_loss, loss_dict

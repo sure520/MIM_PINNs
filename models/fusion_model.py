@@ -455,14 +455,16 @@ class MIMHomPINNFusion(nn.Module):
         R2 = y3 - y2_x  # y3 - y2' = 0
         R3 = y4 - y3_x  # y4 - y3' = 0
         
-        # 确保x与其他张量形状匹配
+        # 确保x与其他张量形状匹配，避免squeeze操作破坏梯度链
+        # 使用广播机制确保形状匹配，而不是squeeze
         if len(x.shape) > 1:
-            x_reshaped = x.squeeze()
+            x_reshaped = x.view(-1)  # 使用view而不是squeeze
         else:
             x_reshaped = x
         
         # 计算R4残差项，确保所有操作都在计算图中
-        R4 = (y4_x - ((T + v*x_reshaped) * y3 - v * y2 - omega2_val * y1))  # y4' - ((T+vx)y'' - vy' - ω²y) = 0
+        # 使用广播机制确保形状匹配
+        R4 = (y4_x - ((T + v*x_reshaped.unsqueeze(1)) * y3 - v * y2 - omega2_val * y1))  # y4' - ((T+vx)y'' - vy' - ω²y) = 0
         
         # 计算每个残差项的均方损失，保持梯度计算链
         R1_loss = (R1**2).mean()
