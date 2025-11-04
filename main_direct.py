@@ -1,6 +1,6 @@
 """
-MIM-HomPINNs 直接训练主程序
-使用DirectTrainer类进行训练，无需同伦步骤
+MIM-HomPINNs 分阶直接训练主程序
+使用HierarchicalDirectTrainer类进行"无同伦、分阶聚焦"训练，依次求解各阶特征值
 """
 
 import os
@@ -17,8 +17,8 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # 导入必要的模块
-from utils.data_generator import DataGenerator
-from utils.direct_trainer import DirectTrainer, create_direct_trainer
+from data.data_generator import DataGenerator
+from utils.direct_trainer import HierarchicalDirectTrainer, create_hierarchical_trainer
 from models.fusion_model import MIMHomPINNFusion
 from configs.direct_config import get_direct_config, get_custom_config, print_config_summary
 
@@ -39,12 +39,12 @@ def create_save_directory(base_dir="results"):
     
     return save_dir
 
-def run_direct_training(k_values, config, device, save_dir):
+def run_hierarchical_training(k_max, config, device, save_dir):
     """
-    使用DirectTrainer运行直接训练
+    使用HierarchicalDirectTrainer运行分阶训练
     
     Args:
-        k_values: 要尝试的k值列表
+        k_max: 要训练的最大特征值阶数
         config: 训练配置
         device: 计算设备
         save_dir: 保存目录
@@ -53,28 +53,49 @@ def run_direct_training(k_values, config, device, save_dir):
         results: 训练结果字典
     """
     results = {}
+    omega_low_2 = None  # 初始无低阶特征值
     
-    print(f"开始直接训练，k值范围: {k_values}")
+    print(f"开始分阶训练，最大阶数: {k_max}")
     print(f"使用设备: {device}")
     print(f"结果保存目录: {save_dir}")
     
-    for k in k_values:
-        print(f"\n正在训练 k={k} 的模型...")
+    # 依次训练各阶特征值
+    for k in range(1, k_max + 1):
+        print(f"\n正在训练第 {k} 阶特征值...")
         
         try:
             # 创建数据生成器
-            data_gen = DataGenerator(domain=[0, 1])
+            data_gen = DataGenerator(
+                domain=config['data']['domain'],
+                n_domain=config['data']['N_f'],
+                n_boundary=config['data']['N_b'],
+                n_test=config['data']['N_test']
+            )
             
             # 创建模型
-            model = MIMHomPINNFusion()
+            if k == 1:
+                # 第一阶训练，创建新模型
+                model = MIMHomPINNFusion()
+            else:
+                # 高阶训练，加载前一阶的模型参数
+                model = MIMHomPINNFusion()
+                model_path = os.path.join(save_dir, "models", f"model_k{k-1}.pth")
+                if os.path.exists(model_path):
+                    checkpoint = torch.load(model_path, map_location=device)
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                    print(f"已加载第 {k-1} 阶模型参数")
+                else:
+                    print(f"警告: 未找到第 {k-1} 阶模型参数，使用随机初始化")
             
-            # 创建直接训练器
-            trainer = create_direct_trainer(
+            # 创建分阶训练器
+            trainer = create_hierarchical_trainer(
                 model=model,
                 data_gen=data_gen,
+                k=k,
+                omega_low_2=omega_low_2,
                 config=config,
                 device=device,
-                save_dir=save_dir
+                save_dir=os.path.join(save_dir, f'k{k}_results')
             )
             
             # 开始训练
@@ -85,6 +106,9 @@ def run_direct_training(k_values, config, device, save_dir):
             # 评估模型
             eval_results = trainer.evaluate()
             
+            # 保存当前阶特征值，作为下一阶的低阶特征值
+            omega_low_2 = eval_results['omega2']
+            
             # 保存结果
             results[k] = {
                 'training_time': training_time,
@@ -93,7 +117,7 @@ def run_direct_training(k_values, config, device, save_dir):
                 'omega2': eval_results['omega2']
             }
             
-            print(f"k={k} 训练完成，用时: {training_time:.2f}秒")
+            print(f"第 {k} 阶特征值训练完成，用时: {training_time:.2f}秒")
             print(f"最终损失: {eval_results['final_loss']:.6f}")
             print(f"特征值: {eval_results['omega2']:.6f}")
             
@@ -109,19 +133,24 @@ def run_direct_training(k_values, config, device, save_dir):
             # 保存训练日志
             log_save_path = os.path.join(save_dir, "logs", f"training_log_k{k}.txt")
             with open(log_save_path, 'w') as f:
-                f.write(f"k={k} 训练日志\n")
+                f.write(f"第 {k} 阶特征值训练日志\n")
                 f.write(f"训练时间: {training_time:.2f}秒\n")
                 f.write(f"最终损失: {eval_results['final_loss']:.6f}\n")
                 f.write(f"特征值: {eval_results['omega2']:.6f}\n")
                 f.write(f"PDE误差: {eval_results['pde_error']:.6f}\n")
                 f.write(f"边界误差: {eval_results['bc_error']:.6f}\n")
             
+            # 生成特征函数图像
+            plot_eigenfunction(model, eval_results['omega2'], k, save_dir)
+            
         except Exception as e:
-            print(f"k={k} 训练失败: {str(e)}")
+            print(f"第 {k} 阶特征值训练失败: {str(e)}")
             results[k] = {'error': str(e)}
+            # 如果当前阶训练失败，停止后续训练
+            break
     
     # 保存所有结果
-    results_save_path = os.path.join(save_dir, "training_results.json")
+    results_save_path = os.path.join(save_dir, "hierarchical_training_results.json")
     with open(results_save_path, 'w') as f:
         # 转换numpy类型为Python原生类型，以便JSON序列化
         serializable_results = {}
@@ -140,147 +169,185 @@ def run_direct_training(k_values, config, device, save_dir):
     
     return results
 
-def visualize_results(results, save_dir):
+def plot_eigenfunction(model, omega2, k, save_dir):
     """
-    可视化训练结果
+    绘制特征函数图像
+    
+    Args:
+        model: 训练好的模型
+        omega2: 特征值
+        k: 特征值阶数
+        save_dir: 保存目录
+    """
+    model.eval()
+    
+    # 生成测试点
+    x_test = np.linspace(0, 1, 1000)
+    x_tensor = torch.tensor(x_test, dtype=torch.float32, device=next(model.parameters()).device).unsqueeze(1)
+    
+    with torch.no_grad():
+        # 获取模型输出
+        y_pred = model(x_tensor)[:, 0].cpu().numpy()
+    
+    # 绘制特征函数
+    plt.figure(figsize=(10, 6))
+    plt.plot(x_test, y_pred, label=f'第 {k} 阶特征函数')
+    plt.xlabel('x')
+    plt.ylabel('y(x)')
+    plt.title(f'第 {k} 阶特征函数 (ω² = {omega2:.4f})')
+    plt.grid(True)
+    plt.legend()
+    
+    # 保存图像
+    plt.savefig(os.path.join(save_dir, "figures", f"eigenfunction_k{k}.png"), dpi=300)
+    plt.close()
+
+def visualize_hierarchical_results(results, save_dir):
+    """
+    可视化分阶训练结果
     
     Args:
         results: 训练结果字典
         save_dir: 保存目录
     """
-    # 创建损失历史图
-    plt.figure(figsize=(12, 8))
+    # 创建图像保存目录
+    figures_dir = os.path.join(save_dir, "figures")
+    os.makedirs(figures_dir, exist_ok=True)
     
-    # 子图1: 总损失
-    plt.subplot(2, 2, 1)
-    for k, result in results.items():
-        if 'error' not in result and 'history' in result:
-            plt.plot(result['history']['total_loss'], label=f'k={k}')
-    plt.xlabel('Epoch')
-    plt.ylabel('Total Loss')
-    plt.title('总损失历史')
-    plt.legend()
-    plt.grid(True)
-    
-    # 子图2: PDE残差损失
-    plt.subplot(2, 2, 2)
-    for k, result in results.items():
-        if 'error' not in result and 'history' in result:
-            plt.plot(result['history']['pde_loss'], label=f'k={k}')
-    plt.xlabel('Epoch')
-    plt.ylabel('PDE Loss')
-    plt.title('PDE残差损失历史')
-    plt.legend()
-    plt.grid(True)
-    
-    # 子图3: 边界条件损失
-    plt.subplot(2, 2, 3)
-    for k, result in results.items():
-        if 'error' not in result and 'history' in result:
-            plt.plot(result['history']['bc_loss'], label=f'k={k}')
-    plt.xlabel('Epoch')
-    plt.ylabel('BC Loss')
-    plt.title('边界条件损失历史')
-    plt.legend()
-    plt.grid(True)
-    
-    # 子图4: 特征值变化
-    plt.subplot(2, 2, 4)
-    for k, result in results.items():
-        if 'error' not in result and 'history' in result:
-            plt.plot(result['history']['omega2'], label=f'k={k}')
-    plt.xlabel('Epoch')
-    plt.ylabel('Omega²')
-    plt.title('特征值变化历史')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, "figures", "loss_history.png"), dpi=300)
-    plt.close()
-    
-    # 创建k值与最终损失的关系图
-    plt.figure(figsize=(10, 6))
-    
-    k_vals = []
+    # 提取成功的训练结果
+    successful_ks = []
+    omega2_values = []
+    training_times = []
     final_losses = []
-    omega2_vals = []
     
     for k, result in results.items():
-        if 'error' not in result and 'eval_results' in result:
-            k_vals.append(k)
+        if 'error' not in result:
+            successful_ks.append(k)
+            omega2_values.append(result['omega2'])
+            training_times.append(result['training_time'])
             final_losses.append(result['eval_results']['final_loss'])
-            omega2_vals.append(result['eval_results']['omega2'])
     
-    # 子图1: 最终损失
-    plt.subplot(1, 2, 1)
-    plt.plot(k_vals, final_losses, 'o-')
-    plt.xlabel('k值')
-    plt.ylabel('最终损失')
-    plt.title('k值与最终损失的关系')
+    if not successful_ks:
+        print("没有成功的训练结果，无法生成可视化图像")
+        return
+    
+    # 1. 特征值随阶数变化的图像
+    plt.figure(figsize=(10, 6))
+    plt.plot(successful_ks, omega2_values, 'o-', linewidth=2, markersize=8)
+    plt.xlabel('特征值阶数 k')
+    plt.ylabel('特征值 ω²')
+    plt.title('特征值随阶数变化')
     plt.grid(True)
-    
-    # 子图2: 特征值
-    plt.subplot(1, 2, 2)
-    plt.plot(k_vals, omega2_vals, 'o-')
-    plt.xlabel('k值')
-    plt.ylabel('特征值')
-    plt.title('k值与特征值的关系')
-    plt.grid(True)
-    
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, "figures", "k_analysis.png"), dpi=300)
+    plt.savefig(os.path.join(figures_dir, "eigenvalues_vs_k.png"), dpi=300)
     plt.close()
+    
+    # 2. 训练时间随阶数变化的图像
+    plt.figure(figsize=(10, 6))
+    plt.plot(successful_ks, training_times, 's-', color='orange', linewidth=2, markersize=8)
+    plt.xlabel('特征值阶数 k')
+    plt.ylabel('训练时间 (秒)')
+    plt.title('训练时间随阶数变化')
+    plt.grid(True)
+    plt.savefig(os.path.join(figures_dir, "training_time_vs_k.png"), dpi=300)
+    plt.close()
+    
+    # 3. 最终损失随阶数变化的图像
+    plt.figure(figsize=(10, 6))
+    plt.plot(successful_ks, final_losses, '^-', color='green', linewidth=2, markersize=8)
+    plt.xlabel('特征值阶数 k')
+    plt.ylabel('最终损失')
+    plt.title('最终损失随阶数变化')
+    plt.grid(True)
+    plt.savefig(os.path.join(figures_dir, "final_loss_vs_k.png"), dpi=300)
+    plt.close()
+    
+    # 4. 特征值增长率的图像
+    if len(omega2_values) > 1:
+        growth_rates = []
+        for i in range(1, len(omega2_values)):
+            growth_rate = (omega2_values[i] - omega2_values[i-1]) / omega2_values[i-1]
+            growth_rates.append(growth_rate)
+        
+        plt.figure(figsize=(10, 6))
+        plt.plot(successful_ks[1:], growth_rates, 'd-', color='purple', linewidth=2, markersize=8)
+        plt.xlabel('特征值阶数 k')
+        plt.ylabel('特征值增长率')
+        plt.title('特征值增长率随阶数变化')
+        plt.grid(True)
+        plt.savefig(os.path.join(figures_dir, "eigenvalue_growth_rate.png"), dpi=300)
+        plt.close()
+    
+    print(f"可视化结果已保存到 {figures_dir} 目录")
 
-def print_results_summary(results):
+def print_hierarchical_results_summary(results):
     """
-    打印结果总结
+    打印分阶训练结果摘要
     
     Args:
         results: 训练结果字典
     """
-    print("\n===== 训练结果总结 =====")
+    print("\n" + "="*60)
+    print("分阶训练结果摘要")
+    print("="*60)
     
-    successful_k = []
-    failed_k = []
+    successful_ks = []
+    failed_ks = []
     
     for k, result in results.items():
         if 'error' in result:
-            failed_k.append((k, result['error']))
+            failed_ks.append(k)
         else:
-            successful_k.append(k)
+            successful_ks.append(k)
     
-    print(f"成功训练的k值: {successful_k}")
-    print(f"训练失败的k值: {[k for k, _ in failed_k]}")
+    print(f"成功训练的特征值阶数: {successful_ks}")
+    print(f"失败的特征值阶数: {failed_ks}")
     
-    if failed_k:
+    if successful_ks:
+        print("\n各阶特征值详情:")
+        print("-"*60)
+        print(f"{'阶数':<6} {'特征值 ω²':<15} {'最终损失':<12} {'训练时间(s)':<12}")
+        print("-"*60)
+        
+        for k in successful_ks:
+            result = results[k]
+            omega2 = result['omega2']
+            final_loss = result['eval_results']['final_loss']
+            training_time = result['training_time']
+            print(f"{k:<6} {omega2:<15.6f} {final_loss:<12.6f} {training_time:<12.2f}")
+        
+        # 计算特征值增长率
+        if len(successful_ks) > 1:
+            print("\n特征值增长率:")
+            print("-"*60)
+            print(f"{'阶数':<6} {'特征值':<15} {'增长率':<12}")
+            print("-"*60)
+            
+            prev_omega2 = None
+            for k in successful_ks:
+                result = results[k]
+                omega2 = result['omega2']
+                if prev_omega2 is not None:
+                    growth_rate = (omega2 - prev_omega2) / prev_omega2 * 100
+                    print(f"{k:<6} {omega2:<15.6f} {growth_rate:<12.2f}%")
+                else:
+                    print(f"{k:<6} {omega2:<15.6f} {'基准':<12}")
+                prev_omega2 = omega2
+    
+    if failed_ks:
         print("\n失败原因:")
-        for k, error in failed_k:
-            print(f"  k={k}: {error}")
+        print("-"*60)
+        for k in failed_ks:
+            print(f"阶数 {k}: {results[k]['error']}")
     
-    if successful_k:
-        print("\n最佳结果:")
-        best_k = None
-        best_loss = float('inf')
-        
-        for k in successful_k:
-            final_loss = results[k]['eval_results']['final_loss']
-            if final_loss < best_loss:
-                best_loss = final_loss
-                best_k = k
-        
-        print(f"  最佳k值: {best_k}")
-        print(f"  最佳损失: {best_loss:.6f}")
-        print(f"  对应特征值: {results[best_k]['eval_results']['omega2']:.6f}")
-        print(f"  训练时间: {results[best_k]['training_time']:.2f}秒")
+    print("="*60)
 
-def main(config_type='balanced', k_values=None, **kwargs):
+def main(config_type='balanced', k_max=3, **kwargs):
     """
     主函数
     
     Args:
         config_type: 配置类型 ('balanced', 'quick', 'high_precision')
-        k_values: 要尝试的k值列表，默认为[2, 3, 4, 5]
+        k_max: 要训练的最大特征值阶数
         **kwargs: 额外的配置参数，会覆盖默认配置
         
     Returns:
@@ -345,21 +412,17 @@ def main(config_type='balanced', k_values=None, **kwargs):
     with open(config_path, 'w') as f:
         json.dump(config, f, indent=4)
     
-    # 5. 设置k值范围
-    if k_values is None:
-        k_values = [2, 3, 4, 5]
+    # 5. 运行分阶训练
+    print("\n开始分阶训练过程...")
+    results = run_hierarchical_training(k_max, config, device, save_dir)
     
-    # 6. 运行直接训练
-    print("\n开始直接训练过程...")
-    results = run_direct_training(k_values, config, device, save_dir)
-    
-    # 7. 可视化结果
+    # 6. 可视化结果
     print("\n生成可视化结果...")
-    visualize_results(results, save_dir)
+    visualize_hierarchical_results(results, save_dir)
     
-    # 8. 打印总结
+    # 7. 打印总结
     print("\n训练完成!")
-    print_results_summary(results)
+    print_hierarchical_results_summary(results)
     
     return results, save_dir
 
@@ -367,12 +430,12 @@ if __name__ == "__main__":
     import argparse
     
     # 添加命令行参数解析
-    parser = argparse.ArgumentParser(description='MIM-HomPINNs 直接训练程序')
+    parser = argparse.ArgumentParser(description='MIM-HomPINNs 分阶直接训练程序')
     parser.add_argument('--config', type=str, default='balanced', 
                        choices=['balanced', 'quick', 'high_precision'],
                        help='配置类型 (默认: balanced)')
-    parser.add_argument('--k-values', type=int, nargs='+', default=[2, 3, 4, 5],
-                       help='要尝试的k值列表 (默认: [2, 3, 4, 5])')
+    parser.add_argument('--k-max', type=int, default=3,
+                       help='要训练的最大特征值阶数 (默认: 3)')
     parser.add_argument('--lr', type=float, default=None,
                        help='学习率 (覆盖配置文件中的值)')
     parser.add_argument('--epochs', type=int, default=None,
@@ -417,6 +480,6 @@ if __name__ == "__main__":
     # 运行主函数
     results, save_dir = main(
         config_type=args.config,
-        k_values=args.k_values,
+        k_max=args.k_max,
         **custom_params
     )

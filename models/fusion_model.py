@@ -409,7 +409,7 @@ class MIMHomPINNFusion(nn.Module):
         
         return L_a.mean()
     
-    def compute_eigenvalue_hierarchy_loss(self, omega2_val, omega_low_2, epsilon=5.0, a=20.0):
+    def compute_eigenvalue_hierarchy_loss(self, omega2_val, omega_low_2, k=1, epsilon=5.0, a=20.0):
         """
         计算特征值层级约束损失 L_c（实现多阶特征值引导功能）
         
@@ -418,12 +418,17 @@ class MIMHomPINNFusion(nn.Module):
         Args:
             omega2_val: 当前特征值
             omega_low_2: 低阶特征值
+            k: 当前训练的特征值阶数（k=1表示一阶特征值，不使用层级约束）
             epsilon: 安全边际（默认5.0）
             a: 缩放参数（默认20.0）
         Returns:
             L_c: 特征值层级约束损失
         """
-        # 使用Sigmoid函数实现特征值范围约束
+        # 对于一阶特征值(k=1)，不使用层级约束，直接返回0
+        if k <= 1:
+            return torch.tensor(0.0, device=omega2_val.device)
+        
+        # 对于高阶特征值(k>1)，使用Sigmoid函数实现特征值范围约束
         # L_c = -σ(a·(ω² - (ω_low² + ε))) + 1
         z = a * (omega2_val - (omega_low_2 + epsilon))
         sigma_z = 1.0 / (1.0 + torch.exp(-z))  # Sigmoid函数
@@ -451,7 +456,7 @@ class MIMHomPINNFusion(nn.Module):
         
         return L_nz
     
-    def compute_total_loss(self, x, x_b, T=600, v=50, omega2=None, omega_low_2=None, 
+    def compute_total_loss(self, x, x_b, T=600, v=50, omega2=None, omega_low_2=None, k=1,
                           weights=None, x_a=0.5, y_a=1.0, epsilon_hierarchy=5.0, a=20.0, epsilon_nonzero=1e-6):
         """
         计算完整的总损失函数
@@ -465,6 +470,7 @@ class MIMHomPINNFusion(nn.Module):
             v: 方程参数v
             omega2: 特征值
             omega_low_2: 低阶特征值（用于层级约束）
+            k: 当前训练的特征值阶数（k=1表示一阶特征值，不使用层级约束）
             weights: 各损失项权重字典
             x_a: 振幅约束点位置
             y_a: 振幅约束目标值
@@ -500,9 +506,9 @@ class MIMHomPINNFusion(nn.Module):
         # 注意：振幅约束需要在特定配点处计算，这里使用x_a作为约束点
         L_a = self.compute_amplitude_constraint_loss(x_a, y_a, T, v, omega2)
         
-        # 4. 特征值层级约束损失（如果有低阶特征值）
-        if omega_low_2 is not None:
-            L_c = self.compute_eigenvalue_hierarchy_loss(omega2_val, omega_low_2, epsilon_hierarchy, a)
+        # 4. 特征值层级约束损失（如果有低阶特征值且k>1）
+        if omega_low_2 is not None and k > 1:
+            L_c = self.compute_eigenvalue_hierarchy_loss(omega2_val, omega_low_2, k, epsilon_hierarchy, a)
         else:
             L_c = torch.tensor(0.0, device=self.device)
         

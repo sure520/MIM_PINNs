@@ -159,7 +159,8 @@ def get_direct_config(config_type='balanced'):
     elif config_type == 'high_precision':
         return HIGH_PRECISION_CONFIG.copy()
     else:
-        raise ValueError(f"不支持的配置类型: {config_type}")
+        print(f"警告: 不支持的配置类型: {config_type}，使用默认平衡配置")
+        return DIRECT_TRAINER_CONFIG.copy()
 
 
 def get_custom_config(base_config='balanced', **kwargs):

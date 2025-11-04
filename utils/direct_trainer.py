@@ -630,3 +630,223 @@ def create_direct_trainer(model, data_gen, config=None, device='cpu', save_dir='
         trainer: DirectTrainer实例
     """
     return DirectTrainer(model, data_gen, config, 'balanced', device, save_dir)
+
+
+class HierarchicalDirectTrainer(DirectTrainer):
+    """
+    分阶直接训练器，支持"无同伦、分阶聚焦"的训练流程
+    """
+    
+    def __init__(self, model, data_gen, config=None, config_type='balanced', device='cuda' if torch.cuda.is_available() else 'cpu', save_dir='results', k=1, omega_low_2=None):
+        """
+        初始化分阶训练器
+        
+        Args:
+            model: PINNs模型
+            data_gen: 数据生成器实例
+            config: 训练配置字典或配置类型字符串
+            config_type: 配置类型（当config为None时使用）
+            device: 计算设备
+            save_dir: 结果保存目录
+            k: 当前训练的特征值阶数
+            omega_low_2: 低阶特征值（用于层级约束）
+        """
+        # 调用父类初始化
+        super().__init__(model, data_gen, config, config_type, device, save_dir)
+        
+        # 分阶训练特有参数
+        self.k = k
+        self.omega_low_2 = omega_low_2
+        
+        # 根据k值调整配置
+        self._adjust_config_for_k()
+        
+        # 记录初始化信息
+        self.logger.info(f"分阶训练器初始化完成，当前训练第{k}阶特征值")
+        if omega_low_2 is not None:
+            self.logger.info(f"低阶特征值: {omega_low_2}")
+    
+    def _adjust_config_for_k(self):
+        """根据k值调整训练配置"""
+        # 对于一阶特征值(k=1)，使用较少的迭代次数和较高的学习率
+        if self.k == 1:
+            self.config['training']['epochs'] = 30000
+            self.config['training']['lr'] = 0.001
+            self.config['training']['omega2_init'] = 100.0  # 接近(π)^4≈97.4
+            self.logger.info("一阶特征值训练配置: epochs=30000, lr=0.001, omega2_init=100.0")
+        # 对于高阶特征值(k>1)，使用更多的迭代次数和先Adam后L-BFGS的优化策略
+        else:
+            self.config['training']['epochs'] = 60000
+            self.config['training']['lr'] = 0.0001  # 前期使用较小的学习率
+            # 初始特征值设为低阶特征值+50
+            if self.omega_low_2 is not None:
+                self.config['training']['omega2_init'] = float(self.omega_low_2 + 50.0)
+            self.logger.info(f"高阶特征值训练配置: epochs=60000, lr=0.0001, omega2_init={self.config['training']['omega2_init']}")
+    
+    def compute_loss(self, x, x_b):
+        """
+        计算总损失 - 使用新的MIMHomPINNFusion模型损失函数，支持分阶训练
+        
+        Args:
+            x: 内部点
+            x_b: 边界点
+            
+        Returns:
+            total_loss: 总损失
+            loss_dict: 各损失项详细值
+        """
+        # 获取方程参数
+        T = self.config['equation']['T']
+        v = self.config['equation']['v']
+        
+        # 振幅约束点位置（默认在域中点）
+        # 对于高阶特征值，如果中点可能是节点，可以调整约束点位置
+        x_a = 0.5
+        if self.k > 1:
+            # 对于高阶特征值，可以尝试不同的约束点位置，避开可能的节点
+            x_a = 0.3  # 避开可能的节点位置
+        x_a = torch.tensor([x_a], dtype=torch.float32, device=self.device)
+        y_a = 1.0  # 振幅约束目标值
+        
+        # 使用模型的总损失函数，传入k参数
+        total_loss, loss_dict = self.model.compute_total_loss(
+            x=x, 
+            x_b=x_b, 
+            T=T, 
+            v=v, 
+            omega2=self.omega2,
+            omega_low_2=self.omega_low_2,
+            k=self.k,
+            weights={
+                'residual': 1.0,
+                'boundary': self.config['training']['alpha'],
+                'amplitude': 100.0,
+                'hierarchy': 100.0 if self.k > 1 else 0.0,  # 只对高阶特征值使用层级约束
+                'nonzero': self.config['training']['beta']
+            },
+            x_a=x_a,
+            y_a=y_a
+        )
+        
+        return total_loss, loss_dict
+    
+    def train(self):
+        """执行分阶训练循环"""
+        self.start_time = time.time()
+        
+        # 训练进度条
+        pbar = tqdm(range(self.config['training']['epochs']), desc=f"训练第{self.k}阶特征值")
+        
+        for epoch in pbar:
+            self.epoch = epoch
+            
+            # 单步训练
+            train_loss, loss_dict = self._train_step()
+            
+            # 记录损失
+            self._record_losses(train_loss, loss_dict)
+            
+            # 更新进度条
+            self._update_progress_bar(pbar, train_loss, loss_dict)
+            
+            # 检查早停条件（根据k值调整）
+            if self._check_early_stopping_for_k():
+                self.logger.info(f"第{self.k}阶特征值训练早停触发于第 {epoch} 轮")
+                break
+            
+            # 保存检查点
+            if epoch % self.config['training']['save_interval'] == 0:
+                self._save_checkpoint(epoch)
+            
+            # 对于高阶特征值，在10000轮后切换优化器为L-BFGS
+            if self.k > 1 and epoch == 10000:
+                self.logger.info("切换到L-BFGS优化器进行精细优化")
+                self._switch_to_lbfgs()
+            
+            # 更新学习率
+            if self.scheduler and epoch < 10000:  # 只在前10000轮使用学习率调度
+                self.scheduler.step()
+        
+        # 训练完成
+        self._finalize_training()
+    
+    def _check_early_stopping_for_k(self):
+        """根据k值检查早停条件"""
+        if not self.config['training']['early_stopping']:
+            return False
+        
+        # 根据k值设置不同的早停参数
+        if self.k == 1:
+            patience = 1000  # 一阶特征值使用较小的耐心值
+            min_delta = 1e-6  # 一阶特征值使用较小的最小变化阈值
+            stability_window = 1000  # 检查特征值稳定的窗口大小
+            stability_threshold = 0.01  # 特征值变化阈值(1%)
+        else:
+            patience = 2000  # 高阶特征值使用较大的耐心值
+            min_delta = 5e-6  # 高阶特征值允许稍大的残差
+            stability_window = 2000  # 检查特征值稳定的窗口大小
+            stability_threshold = 0.02  # 特征值变化阈值(2%)
+        
+        if len(self.history['total_loss']) < patience:
+            return False
+        
+        # 检查最近patience轮内损失是否没有显著改善
+        recent_losses = self.history['total_loss'][-patience:]
+        min_recent_loss = min(recent_losses)
+        current_loss = self.history['total_loss'][-1]
+        
+        if current_loss - min_recent_loss > min_delta:
+            return True
+        
+        # 检查特征值是否稳定
+        if len(self.history['omega2']) >= stability_window:
+            recent_omega2 = self.history['omega2'][-stability_window:]
+            omega2_mean = sum(recent_omega2) / len(recent_omega2)
+            omega2_std = (sum((x - omega2_mean) ** 2 for x in recent_omega2) / len(recent_omega2)) ** 0.5
+            relative_std = omega2_std / omega2_mean
+            
+            if relative_std < stability_threshold:
+                self.logger.info(f"特征值已稳定，相对标准差: {relative_std:.6f}")
+                return True
+        
+        return False
+    
+    def _switch_to_lbfgs(self):
+        """切换到L-BFGS优化器"""
+        # 获取当前模型参数和特征值参数
+        model_params = list(self.model.parameters())
+        
+        # 创建L-BFGS优化器
+        self.optimizer = optim.LBFGS(
+            model_params + [self.omega2],
+            lr=1.0,  # L-BFGS的学习率通常设为1
+            max_iter=20,
+            tolerance_grad=1e-7,
+            tolerance_change=1e-9,
+            history_size=100,
+            line_search_fn='strong_wolfe'
+        )
+        
+        # 禁用学习率调度器
+        self.scheduler = None
+        
+        self.logger.info("已切换到L-BFGS优化器")
+
+
+def create_hierarchical_trainer(model, data_gen, k=1, omega_low_2=None, config=None, device='cpu', save_dir='results'):
+    """
+    创建分阶训练器的便捷函数
+    
+    Args:
+        model: 模型实例
+        data_gen: 数据生成器实例
+        k: 当前训练的特征值阶数
+        omega_low_2: 低阶特征值（用于层级约束）
+        config: 配置字典
+        device: 计算设备
+        save_dir: 保存目录
+        
+    Returns:
+        trainer: HierarchicalDirectTrainer实例
+    """
+    return HierarchicalDirectTrainer(model, data_gen, config, device=device, save_dir=save_dir, k=k, omega_low_2=omega_low_2)
