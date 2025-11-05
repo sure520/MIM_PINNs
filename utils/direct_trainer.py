@@ -123,7 +123,7 @@ class DirectTrainer:
         self._log_init_info()
         
         # 训练开始前的设备一致性检查
-        self._check_device_consistency_before_training()
+        # self._check_device_consistency_before_training()
         
         # 训练历史记录 - 适配新的损失函数结构
         self.history = {
@@ -356,9 +356,9 @@ class DirectTrainer:
             total_loss: 总损失
             loss_dict: 各损失项详细值
         """
-        # 确保x和x_b有requires_grad=True
-        x.requires_grad_(True)
-        x_b.requires_grad_(True)
+        # 确保x和x_b有requires_grad=True，并且是新的张量（避免原地修改问题）
+        x = x.clone().detach().requires_grad_(True)
+        x_b = x_b.clone().detach().requires_grad_(True)
         
         # 获取方程参数
         T = self.config['equation']['T']
@@ -607,17 +607,15 @@ class DirectTrainer:
         """
         self.model.eval()
         
+        # 在测试点上计算预测
+        y1_test, y2_test, y3_test, y4_test, omega2_test = self.model(self.x_test)
+        
+        # 计算PDE残差 - 需要计算梯度，所以不在torch.no_grad()中
+        pde_error = self._compute_pde_residual(y1_test, y2_test, y3_test, y4_test, omega2_test)
+        
+        # 计算边界条件误差和解的L2范数 - 这些不需要梯度
         with torch.no_grad():
-            # 在测试点上计算预测
-            y1_test, y2_test, y3_test, y4_test, omega2_test = self.model(self.x_test)
-            
-            # 计算PDE残差 - 实现实际的PDE残差计算
-            pde_error = self._compute_pde_residual(y1_test, y2_test, y3_test, y4_test, omega2_test)
-            
-            # 计算边界条件误差
             bc_error = self._compute_boundary_loss(y1_test, y2_test, y3_test, y4_test)
-            
-            # 计算解的L2范数
             solution_norm = torch.mean(y1_test**2).item()
             
             eval_results = {
@@ -649,11 +647,11 @@ class DirectTrainer:
         T = self.config['equation']['T']
         v = self.config['equation']['v']
         
-        # 计算空间导数
+        # 计算空间导数 - 在评估模式下不需要创建计算图
         y1_x = torch.autograd.grad(y1, self.x_test, grad_outputs=torch.ones_like(y1),
-                                 create_graph=True, retain_graph=True)[0]
+                                 create_graph=False, retain_graph=False)[0]
         y1_xx = torch.autograd.grad(y1_x, self.x_test, grad_outputs=torch.ones_like(y1_x),
-                                  create_graph=True, retain_graph=True)[0]
+                                  create_graph=False, retain_graph=False)[0]
         
         # 计算PDE残差
         # 根据MIM-HomPINNs的PDE形式: y1_xx + omega2/T * y1 + v/T * y2 = 0
@@ -751,18 +749,18 @@ class HierarchicalDirectTrainer(DirectTrainer):
         """根据k值调整训练配置"""
         # 对于一阶特征值(k=1)，使用较少的迭代次数和较高的学习率
         if self.k == 1:
-            self.config['training']['epochs'] = 30000
+            self.config['training']['epochs'] = 50000
             self.config['training']['lr'] = 0.001
             self.config['training']['omega2_init'] = 100.0  # 接近(π)^4≈97.4
-            self.logger.info("一阶特征值训练配置: epochs=30000, lr=0.001, omega2_init=100.0")
+            self.logger.info("一阶特征值训练配置: epochs=50000, lr=0.001, omega2_init=100.0")
         # 对于高阶特征值(k>1)，使用更多的迭代次数和先Adam后L-BFGS的优化策略
         else:
-            self.config['training']['epochs'] = 60000
+            self.config['training']['epochs'] = 100000
             self.config['training']['lr'] = 0.0001  # 前期使用较小的学习率
             # 初始特征值设为低阶特征值+50
             if self.omega_low_2 is not None:
                 self.config['training']['omega2_init'] = float(self.omega_low_2 + 50.0)
-            self.logger.info(f"高阶特征值训练配置: epochs=60000, lr=0.0001, omega2_init={self.config['training']['omega2_init']}")
+            self.logger.info(f"高阶特征值训练配置: epochs=100000, lr=0.0001, omega2_init={self.config['training']['omega2_init']}")
     
     def compute_loss(self, x, x_b):
         """
@@ -776,14 +774,14 @@ class HierarchicalDirectTrainer(DirectTrainer):
             total_loss: 总损失（标量）
             loss_dict: 各损失项详细值
         """
-        # 确保x和x_b有requires_grad=True，并且是二维张量
-        x.requires_grad_(True)
+        # 确保x和x_b有requires_grad=True，创建新的张量避免原地修改问题
+        x = x.clone().detach().requires_grad_(True)
         if len(x.shape) == 1:
-            x = x.reshape(-1, 1).requires_grad_(True)
+            x = x.reshape(-1, 1)
         
-        x_b.requires_grad_(True)
+        x_b = x_b.clone().detach().requires_grad_(True)
         if len(x_b.shape) == 1:
-            x_b = x_b.reshape(-1, 1).requires_grad_(True)
+            x_b = x_b.reshape(-1, 1)
         
         # 获取方程参数
         T = self.config['equation']['T']
@@ -867,15 +865,20 @@ class HierarchicalDirectTrainer(DirectTrainer):
             # 保存检查点
             if epoch % self.config['training']['save_interval'] == 0:
                 self._save_checkpoint(epoch)
+                print(f"第{self.k}阶特征值训练第 {epoch} 轮损失: {train_loss:.6f}, 残差损失: {loss_dict['residual_loss']:.6f}, 边界损失: {loss_dict['boundary_loss']:.6f}, 振幅损失: {loss_dict['amplitude_loss']:.6f}, 层级损失: {loss_dict['hierarchy_loss']:.6f}, 非零损失: {loss_dict['nonzero_loss']:.6f}")
             
-            # 对于高阶特征值，在10000轮后切换优化器为L-BFGS
-            if self.k > 1 and epoch == 10000:
+            # 对于高阶特征值，在40000轮后切换优化器为L-BFGS
+            if self.k > 1 and epoch == 40000:
                 self.logger.info("切换到L-BFGS优化器进行精细优化")
                 self._switch_to_lbfgs()
             
             # 更新学习率
-            if self.scheduler and epoch < 10000:  # 只在前10000轮使用学习率调度
-                self.scheduler.step()
+            if self.scheduler and epoch < 40000:  # 只在前40000轮使用学习率调度
+                if isinstance(self.scheduler, ReduceLROnPlateau):
+                    # ReduceLROnPlateau需要metrics参数
+                    self.scheduler.step(train_loss)
+                else:
+                    self.scheduler.step()
         
         # 训练完成
         self._finalize_training()

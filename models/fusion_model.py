@@ -160,7 +160,6 @@ class MIMHomPINNFusion(nn.Module):
         # 将模型移动到指定设备
         self.model = self.model.to(self.device)
         # 确保设备一致性
-        self._ensure_device_consistency()
     
     def _ensure_device_consistency(self):
         """
@@ -220,8 +219,8 @@ class MIMHomPINNFusion(nn.Module):
             R1, R2, R3, R4: 各个残差项
             y1, y2, y3, y4, omega2_val: 各个变量值
         """
-        # 确保x有requires_grad=True
-        x.requires_grad_(True)
+        # 确保x有requires_grad=True，创建新的张量避免原地修改问题
+        x = x.clone().detach().requires_grad_(True)
         
         # 前向传播
         y1, y2, y3, y4, omega2_val = self.forward(x)

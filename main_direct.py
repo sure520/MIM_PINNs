@@ -114,7 +114,8 @@ def run_hierarchical_training(k_max, config, device, save_dir):
                 'training_time': training_time,
                 'eval_results': eval_results,
                 'history': trainer.history,
-                'omega2': eval_results['omega2']
+                'omega2': eval_results['omega2'],
+                'final_loss': eval_results['final_loss']
             }
             
             print(f"第 {k} 阶特征值训练完成，用时: {training_time:.2f}秒")
