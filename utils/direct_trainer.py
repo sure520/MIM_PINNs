@@ -318,6 +318,18 @@ class DirectTrainer:
             return ExponentialLR(self.optimizer, gamma=self.config['training']['lr_decay_rate'])
         elif scheduler_type == 'plateau':
             return ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=500, verbose=True)
+        elif scheduler_type == 'cosine':
+            try:
+                return optim.lr_scheduler.CosineAnnealingLR(
+                    self.optimizer,
+                    T_max=self.config['training'].get('cosine_T_max', 30000),
+                    eta_min=self.config['training'].get('cosine_eta_min', 1e-6)
+                )
+            except Exception as e:
+                self.logger.error(f"创建余弦退火学习率调度器失败: {e}")
+                return None
+        elif scheduler_type == 'none':
+            return None
         else:
             return None
     
@@ -851,6 +863,26 @@ class HierarchicalDirectTrainer(DirectTrainer):
             # 单步训练 - 现在调用的是子类重写的_train_step方法
             train_loss, loss_dict = self._train_step()
             
+            # 调试：显示梯度信息
+            if epoch % 1000 == 0:  # 每1000轮显示一次梯度信息
+                print(f"\n=== 第{self.k}阶特征值训练第{epoch}轮梯度信息 ===")
+                total_params = 0
+                total_grads = 0
+                
+                for name, param in self.model.named_parameters():
+                    if param.grad is not None:
+                        grad_norm = param.grad.norm().item()
+                        param_norm = param.norm().item()
+                        total_params += param.numel()
+                        total_grads += 1
+                        print(f"参数 {name}: 梯度范数={grad_norm:.6f}, 参数范数={param_norm:.6f}")
+                    else:
+                        print(f"参数 {name}: 无梯度")
+                
+                print(f"总参数数: {total_params}, 有梯度参数数: {total_grads}")
+                print(f"总损失: {train_loss.item():.6f}")
+                print("=" * 60 + "\n")
+
             # 记录损失
             self._record_losses(train_loss, loss_dict)
             
@@ -866,7 +898,10 @@ class HierarchicalDirectTrainer(DirectTrainer):
             if epoch % self.config['training']['save_interval'] == 0:
                 self._save_checkpoint(epoch)
                 print(f"第{self.k}阶特征值训练第 {epoch} 轮损失: {train_loss:.6f}, 残差损失: {loss_dict['residual_loss']:.6f}, 边界损失: {loss_dict['boundary_loss']:.6f}, 振幅损失: {loss_dict['amplitude_loss']:.6f}, 层级损失: {loss_dict['hierarchy_loss']:.6f}, 非零损失: {loss_dict['nonzero_loss']:.6f}")
-            
+                try:
+                    print(f"第{self.k}阶特征值训练第 {epoch} 轮omega2: {self.model.omega2.item():.6f}")
+                except AttributeError:
+                    print(f"第{self.k}阶特征值训练第 {epoch} 轮omega2: 未初始化")
             # 对于高阶特征值，在40000轮后切换优化器为L-BFGS
             if self.k > 1 and epoch == 40000:
                 self.logger.info("切换到L-BFGS优化器进行精细优化")

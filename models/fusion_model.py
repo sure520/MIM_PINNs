@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import math
 
 
 class ResidualBlock(nn.Module):
@@ -12,6 +13,18 @@ class ResidualBlock(nn.Module):
         self.linear1 = nn.Linear(width, width)
         self.linear2 = nn.Linear(width, width)
         self.activation = nn.Tanh()
+        
+        # 初始化网络参数
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        """Xavier/Glorot初始化，适合Tanh激活函数"""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                # Xavier均匀分布初始化
+                nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain('tanh'))
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
     def forward(self, x):
         residual = x
@@ -46,6 +59,18 @@ class MIM1(nn.Module):
         self.output_layer = nn.Linear(width, 4)
         
         self.activation = nn.Tanh()
+        
+        # 初始化网络参数
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        """Xavier/Glorot初始化，适合Tanh激活函数"""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                # Xavier均匀分布初始化
+                nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain('tanh'))
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
     def forward(self, x):
         # 输入处理
@@ -97,6 +122,18 @@ class MIM2(nn.Module):
         )
         
         self.activation = nn.Tanh()
+        
+        # 初始化网络参数
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        """Xavier/Glorot初始化，适合Tanh激活函数"""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                # Xavier均匀分布初始化
+                nn.init.xavier_uniform_(module.weight, gain=nn.init.calculate_gain('tanh'))
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
     def forward(self, x):
         # DNN1 forward - 输出y1和y3
@@ -132,7 +169,7 @@ class MIMHomPINNFusion(nn.Module):
     MIM与HomPINNs融合模型
     结合MIM的一阶系统转化方法和HomPINNs的同伦多解探索方法
     """
-    def __init__(self, width=30, depth=2, model_type='MIM1', device='cuda'):
+    def __init__(self, width=40, depth=3, model_type='MIM1', device='cuda'):
         super(MIMHomPINNFusion, self).__init__()
         self.model_type = model_type
         
@@ -160,6 +197,7 @@ class MIMHomPINNFusion(nn.Module):
         # 将模型移动到指定设备
         self.model = self.model.to(self.device)
         # 确保设备一致性
+        self.omega2 = self.model.omega2
     
     def _ensure_device_consistency(self):
         """

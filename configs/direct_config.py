@@ -6,17 +6,17 @@
 # 直接训练器优化配置
 DIRECT_TRAINER_CONFIG = {
     'training': {
-        'lr': 0.001,                    # 学习率
+        'lr': 0.005,                    # 学习率
         'epochs': 50000,                # 训练轮数
         'optimizer': 'adam',            # 优化器类型
-        'lr_scheduler': 'plateau',         # 学习率调度器
+        'lr_scheduler': 'cosine',         # 学习率调度器
         'lr_decay_rate': 0.95,          # 学习率衰减率
         'lr_decay_steps': 10000,         # 学习率衰减步数
         'omega2_init': 1.0,             # 特征值初始猜测
         'alpha': 10.0,                  # 边界惩罚系数
         'beta': 1e-4,                   # 非零解惩罚系数
         'verbose': 1,                   # 日志打印频率
-        'save_interval': 1000,          # 保存间隔
+        'save_interval': 2000,          # 保存间隔
         'early_stopping': False,         # 是否启用早停
         'patience': 1000,               # 早停耐心值
         'min_delta': 1e-6               # 早停最小变化量
